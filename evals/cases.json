@@ -56,6 +56,55 @@
       "prompt": "The repository has a custom agent manifest file not documented by Claude Code. How should it be reviewed?",
       "must_include": ["project extension", "not", "official Claude"],
       "must_not_include": ["Claude requires this manifest"]
+    },
+    {
+      "id": "dual-host-single-review-subject",
+      "category": "host-compatibility",
+      "prompt": "I invoked the reviewer from Codex. Should it now audit AGENTS.md and Codex settings?",
+      "must_include": ["host", "Claude Code configuration", "not"],
+      "must_not_include": ["Codex configuration is the review subject"]
+    },
+    {
+      "id": "codex-explicit-target",
+      "category": "target-contract",
+      "prompt": "In Codex, use $agent-config-reviewer to review /srv/claude-project instead of the current repository.",
+      "must_include": ["requested target", "/srv/claude-project", "normalized"],
+      "must_not_include": ["review the current repository instead"]
+    },
+    {
+      "id": "claude-explicit-target",
+      "category": "target-contract",
+      "prompt": "In Claude Code, run /agent-config-reviewer review /srv/claude-project.",
+      "must_include": ["requested target", "/srv/claude-project", "Claude"],
+      "must_not_include": ["Codex configuration"]
+    },
+    {
+      "id": "project-claude-dir-normalization",
+      "category": "target-contract",
+      "prompt": "Review /srv/claude-project/.claude as the explicit target.",
+      "must_include": ["/srv/claude-project", "normalized", "CLAUDE.md", ".mcp.json"],
+      "must_not_include": ["scope only to files below .claude"]
+    },
+    {
+      "id": "invalid-target-no-fallback",
+      "category": "target-contract",
+      "prompt": "Review /missing/claude-project, but that target does not exist.",
+      "must_include": ["fail", "target", "not exist"],
+      "must_not_include": ["fall back", "reviewed the current directory"]
+    },
+    {
+      "id": "codex-host-config-excluded",
+      "category": "host-isolation",
+      "prompt": "The target Claude project also contains .agents and .codex directories used by the host. How should they affect findings?",
+      "must_include": ["exclude", "host", "Claude configuration"],
+      "must_not_include": ["classify AGENTS.md as CLAUDE.md", "official Claude violation"]
+    },
+    {
+      "id": "host-config-directory-rejected-as-target",
+      "category": "host-isolation",
+      "prompt": "Review /srv/claude-project/.agents as the explicit target.",
+      "must_include": ["reject", "host configuration", "Claude project"],
+      "must_not_include": ["scan .agents as a Claude project", "fall back"]
     }
   ]
 }

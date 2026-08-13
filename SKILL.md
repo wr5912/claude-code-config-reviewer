@@ -1,12 +1,31 @@
 ---
-name: agent-config-reviewer
-description: Review, validate, and optimize Claude Code project configuration and Claude Agent SDK integration. Use for audits or remediations involving CLAUDE.md, .claude settings/rules/skills/agents/hooks/commands/output styles, .mcp.json, worktrees, permissions, sandboxing, SDK setting sources, tool surfaces, cross-file reachability, and regression validation.
-argument-hint: "[review|optimize|validate] [target=. ]"
+name: "agent-config-reviewer"
+description: "Review, validate, and optimize a target Claude Code configuration and Claude Agent SDK integration from Claude Code or Codex. Use for audits or remediations involving CLAUDE.md, .claude settings/rules/skills/agents/hooks/commands/output styles, .mcp.json, worktrees, permissions, sandboxing, SDK setting sources, tool surfaces, cross-file reachability, and regression validation."
 ---
 
 # Agent Config Reviewer
 
 Review the **effective Claude Code configuration system**, not isolated files. Separate official Claude compliance from security/architecture advice, then validate remediations with the project's own safe evaluation assets when available.
+
+## Host and target contract
+
+Run this Skill from either Claude Code or Codex. The host agent only executes the workflow; the review subject remains Claude Code configuration and Claude Agent SDK integration.
+
+Interpret invocation input as:
+
+```text
+[review|optimize|validate] [target]
+```
+
+- Default the operation to `review` when omitted.
+- Default `target` to the active working directory only when the user does not provide a path.
+- Accept either a Claude project/workspace root or that project's direct `.claude` directory.
+- Resolve an explicit relative path from the invocation working directory. Preserve paths containing spaces and resolve symlinks.
+- Normalize `<project>/.claude` to `<project>` so sibling `CLAUDE.md`, `.mcp.json`, `.worktreeinclude`, and relevant Agent SDK bootstrap code remain in the effective-configuration review.
+- Reject a missing, unreadable, or non-directory target. Reject user-level `~/.claude` and host configuration directories `.agents`/`.codex` as project targets. Never silently fall back to the current directory after an explicit target fails.
+- Echo both the requested target and normalized project root before presenting findings.
+
+Do not review Codex host configuration such as `AGENTS.md`, `.agents/`, or `.codex/` as Claude configuration. Read `references/host-compatibility.md` only when installation, discovery, invocation, or host compatibility is part of the task.
 
 ## Non-negotiable rules
 
@@ -17,8 +36,8 @@ Review the **effective Claude Code configuration system**, not isolated files. S
    - If the installed Claude Code version or current official documentation cannot be resolved and behavior may be version-sensitive, report `UNVERIFIED` instead of asserting noncompliance.
 
 2. **Never assume a repository layout beyond Claude's documented locations.**
-   - The target defaults to the current Claude Code project/workspace.
-   - Discover the project root from the active working directory/repository context.
+   - Honor an explicit target path before using the current project/workspace default.
+   - Normalize a project-local `.claude` target to its parent project root.
    - Do not hard-code `/data`, `workspace/`, product-specific directories, test directories, tenant names, platform names, or organization-specific paths.
    - Treat non-Claude files such as custom manifests as project extensions unless the project explicitly documents their contract.
 
@@ -43,7 +62,7 @@ Review the **effective Claude Code configuration system**, not isolated files. S
 
 ## Scope discovery
 
-Start from the current project/workspace root. Discover, when present:
+Start from the normalized target project/workspace root. Discover, when present:
 
 - `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, parent/project instruction sources that affect the active cwd
 - `.claude/settings.json`, `.claude/settings.local.json`
@@ -59,11 +78,13 @@ Start from the current project/workspace root. Discover, when present:
 
 Do not assume any custom `agent.yaml`/manifest exists. If discovered and relevant, review it as `PROJECT-EXTENSION`, not as an official Claude configuration artifact.
 
+Exclude host-only Codex configuration and installed Skill copies under `.agents/` or `.codex/`. Their presence must not influence target runtime detection or Claude findings.
+
 Read `references/official-compliance.md` before issuing official-compliance findings.
 Read `references/config-responsibility-matrix.md` when assigning configuration responsibilities.
 Read `references/check-catalog.md` for the full review catalog.
 
-## Runtime mode
+## Target Claude runtime mode
 
 Determine whether the project uses:
 
@@ -201,7 +222,7 @@ A higher total score cannot compensate for failure of a critical gate.
 
 For a review, produce:
 
-1. Scope and runtime assumptions.
+1. Host agent, requested target, normalized Claude project root, scope, and target Claude runtime assumptions.
 2. Official compliance summary with official source links for every `OFFICIAL-*` finding.
 3. Cross-file architecture/security findings.
 4. Root causes, not only symptoms.
@@ -228,9 +249,9 @@ Use `templates/review-report.md` as the report structure.
 If Python 3 is already available, `scripts/scan_project.py` can produce a static candidate inventory without executing project hooks or tests:
 
 ```bash
-python3 <skill-dir>/scripts/scan_project.py --target . --runtime auto --format markdown
+python3 <skill-dir>/scripts/scan_project.py --target <project-root-or-project-.claude> --runtime auto --format markdown
 ```
 
-Do not install Python packages merely to run the helper. The Skill must remain usable through normal Claude Code file inspection when the helper is unavailable.
+Do not install Python packages merely to run the helper. The Skill must remain usable through the host agent's normal read-only file inspection when the helper is unavailable.
 
 The helper is a candidate finder, not the compliance authority. Validate every `OFFICIAL-*` result against `references/official-compliance.md` and current official docs.

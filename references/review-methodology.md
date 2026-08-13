@@ -3,7 +3,9 @@
 ## 1. Establish the effective runtime
 
 Record:
-- project root / active cwd;
+- host agent;
+- requested target and invocation cwd;
+- normalized Claude project root;
 - Claude Code version if safely discoverable;
 - CLI, Agent SDK, or both;
 - SDK language/version if discoverable;
@@ -11,6 +13,8 @@ Record:
 - whether user/local configuration is intentionally in scope.
 
 Project review should not automatically inspect or modify `~/.claude` merely because it can affect behavior. Report external configuration as an environmental dependency unless the user asks for an effective-environment audit.
+
+When the target is a project-local `.claude` directory, normalize it to the parent project root before discovery. Reject invalid explicit targets rather than falling back to cwd. Exclude host-only `.agents/` and `.codex/` configuration from the Claude configuration graph.
 
 ## 2. Separate evidence types
 

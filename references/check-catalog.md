@@ -4,6 +4,10 @@ Use this catalog as a systematic checklist. Only checks linked to `official-comp
 
 ## A. Runtime / loading
 
+- Record the host agent separately from the target Claude runtime.
+- Resolve an explicit project root or project-local `.claude` target and echo its normalized root.
+- Reject invalid explicit targets without falling back to cwd.
+- Exclude `.agents/` and `.codex/` host configuration from Claude findings and runtime detection.
 - Detect CLI versus Agent SDK versus both.
 - Locate SDK bootstrap and effective `cwd`.
 - Inspect explicit `settingSources` / `setting_sources`.

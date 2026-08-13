@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Config Reviewer"
+  short_description: "Review Claude Code configuration safely"
+  default_prompt: "Use $agent-config-reviewer to review the Claude Code configuration at the target project path."

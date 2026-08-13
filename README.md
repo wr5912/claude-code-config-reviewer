@@ -1,8 +1,14 @@
 # Agent Config Reviewer（Agent 配置审查器）
 
-一个可移植的 Claude Code 项目级 Skill，用于审查、验证和优化由项目指令、设置、权限、规则、Skills、子 Agent、hooks、MCP、命令、输出样式、worktrees 以及 Claude Agent SDK 启动代码共同构成的**实际生效配置系统**。
+一个可在 **Claude Code** 与 **Codex** 中安装和运行的可移植 Skill，专门用于审查、验证和优化 Claude Code 项目的**实际生效配置系统**，覆盖项目指令、设置、权限、规则、Skills、子 Agent、hooks、MCP、命令、输出样式、worktrees 以及 Claude Agent SDK 启动代码。
+
+Codex 只是本 Skill 的运行宿主之一；审查对象仍然是 Claude Code 配置，不会把 `AGENTS.md`、`.agents/` 或 `.codex/` 当作 Claude 配置审查。
 
 ## 安装
+
+复制完整 Skill 包，而不是只复制 `SKILL.md`。
+
+### Claude Code
 
 项目级：
 
@@ -16,51 +22,93 @@
 ~/.claude/skills/agent-config-reviewer/
 ```
 
-本 Skill 特意使用 `agent-config-reviewer` 这一名称，而没有在 Skill 名称中加入 `claude`。这样既能遵循 Anthropic Agent Skills 的命名约束，也能继续承担 Claude Code 配置审查职责。
+### Codex
 
-## 调用示例
+项目级：
+
+```text
+<project-root>/.agents/skills/agent-config-reviewer/
+```
+
+用户级：
+
+```text
+$HOME/.agents/skills/agent-config-reviewer/
+```
+
+也可以在 Codex 中让 `$skill-installer` 从 GitHub 安装。本仓库的 Skill 位于仓库根目录，因此需明确仓库、源路径 `.` 和目标名称：
+
+```text
+使用 $skill-installer 从仓库 wr5912/claude-code-config-reviewer 的路径 . 安装，并将 Skill 命名为 agent-config-reviewer。
+```
+
+`$skill-installer` 使用 Codex 管理的用户级 Skill 目录。不要再向 `$HOME/.agents/skills` 手动复制同名 Skill，否则两个同名条目可能同时出现在选择器中。如果安装后未出现，请重启 Codex。
+
+本 Skill 使用中立的 `agent-config-reviewer` 名称，以符合可移植 Agent Skills 命名约束，并在两个宿主中保持同一名称。
+
+## 调用与目标路径
+
+Claude Code 使用 `/` 调用：
 
 ```text
 /agent-config-reviewer review
-/agent-config-reviewer review current project configuration
-/agent-config-reviewer optimize the configuration and validate with the existing safe eval harness
-/agent-config-reviewer validate the last configuration change
+/agent-config-reviewer review /path/to/claude-project
+/agent-config-reviewer review "/path/with spaces/.claude"
+/agent-config-reviewer optimize /path/to/claude-project
+/agent-config-reviewer validate /path/to/claude-project
 ```
 
-本 Skill **不要求**仓库采用特定目录结构。它从当前项目或 workspace 出发，查找 Claude Code 文档中定义的位置；不会预设存在 `workspace/`、`/data`、某个特定测试目录、某个特定运行时封装，也不会预设使用任何指定的平台或产品。
+Codex 使用 `$` 调用：
+
+```text
+$agent-config-reviewer review
+$agent-config-reviewer review /path/to/claude-project
+$agent-config-reviewer review "/path/with spaces/.claude"
+$agent-config-reviewer optimize /path/to/claude-project
+$agent-config-reviewer validate /path/to/claude-project
+```
+
+调用格式为 `[review|optimize|validate] [target]`。未指定操作时默认为 `review`；未指定目标时才使用当前工作目录。
+
+`target` 接受 Claude 项目根目录，或该项目直接包含的 `.claude` 目录。传入 `<project>/.claude` 时会规范化为 `<project>`，从而同时审查同级的 `CLAUDE.md`、`.mcp.json`、`.worktreeinclude` 和必要的 Agent SDK 启动代码。不存在、不可读、普通文件、用户级 `~/.claude` 或宿主配置目录 `.agents`/`.codex` 会明确失败，且不会静默回退当前目录。
 
 ## 安全模型
 
 静态审查不会执行项目 hooks 或任意项目代码。现有 tests/evals 会被视为验证资产，而不是生产配置的修改目标。只有在识别出安全的非生产、mock 或 replay 验证环境，或由用户提供此类环境后，才允许进行运行时验证。
 
-## 规范性发现与建议性发现
+## 验证 Skill 包
 
-只有当前有效的 Anthropic/Claude 官方文档可以作为 `OFFICIAL-*` 类发现的依据。安全性、可移植性、架构和可维护性方面的建议会单独明确标注。有限范围修改、配对比较、已接受/已拒绝修复记忆，以及以验证为门槛的优化等社区方法，仅作为非规范性的优化技术使用。
+```bash
+python3 -B scripts/self_check.py
+python3 -B -m unittest discover -s tests -v
+```
+
+第一条命令校验包清单、文件哈希、双宿主元数据和目标契约；第二条命令覆盖显式路径规范化、宿主配置隔离与目标 Claude runtime 检测。两者都只使用 Python 标准库。
+
+## 规范性发现与宿主兼容
+
+只有当前有效的 Anthropic/Claude 官方文档可以作为 Claude 配置 `OFFICIAL-*` 类发现的依据。OpenAI 官方文档只用于验证 Codex 的安装、发现与调用兼容性，不能用于判定 Claude 配置是否合规。安全性、可移植性、架构和可维护性建议会单独标注。
 
 ## 包含内容
 
 ```text
 agent-config-reviewer/
 ├── SKILL.md
-├── README.md
+├── agents/
+│   └── openai.yaml
 ├── references/
-│   ├── official-compliance.md
-│   ├── config-responsibility-matrix.md
-│   ├── check-catalog.md
-│   ├── review-methodology.md
-│   ├── remediation-patterns.md
-│   ├── eval-harness.md
-│   ├── optimization-loop.md
-│   └── non-normative-inspirations.md
 ├── scripts/
 │   ├── scan_project.py
 │   └── self_check.py
 ├── evals/
-│   └── cases.json
-└── templates/
-    └── review-report.md
+├── templates/
+├── tests/
+├── LICENSE
+├── PACKAGE-MANIFEST.json
+├── README.md
+└── README_en.md
 ```
 
 ## 内置官方基线
 
-内置的官方来源基线已于 **2026-08-13** 重新核查。Claude Code 的变化很快；在网络可用时，审查器应先根据当前官方文档刷新对版本敏感的结论，再作出合规判定。若无法刷新，则必须将对版本敏感的发现标记为 `UNVERIFIED`，而不能直接认定为违规。
+内置的 Claude 配置来源基线和双宿主安装契约已于 **2026-08-13** 重新核查。Claude Code 与 Codex 都会快速变化；网络可用时，应先根据各自当前官方文档刷新对版本敏感的结论。无法核实的 Claude 配置发现必须标记为 `UNVERIFIED`，不能直接认定为违规。

@@ -15,12 +15,14 @@ OFFICIAL-* candidate must be checked against current official Claude documentati
 from __future__ import annotations
 
 import argparse
+import ast
+import io
 import json
 import os
 import re
-import shutil
-import subprocess
+import shlex
 import sys
+import tokenize
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Iterable
@@ -29,6 +31,11 @@ try:
     import yaml  # type: ignore
 except Exception:
     yaml = None
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python 3.10 fallback remains conservative.
+    tomllib = None  # type: ignore
 
 OFFICIAL = {
     "settings": "https://code.claude.com/docs/en/settings",
@@ -52,14 +59,23 @@ BUILD_DIRS = {
     ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
     ".next", ".turbo", "coverage", ".coverage", ".idea", ".vscode",
 }
+HOST_CONFIG_DIRS = {".agents", ".codex"}
 EVAL_DIR_NAMES = {
     "test", "tests", "__tests__", "spec", "specs", "eval", "evals", "evaluation",
     "evaluations", "benchmark", "benchmarks",
 }
 TEXT_EXTENSIONS = {
     ".md", ".json", ".jsonc", ".yaml", ".yml", ".py", ".js", ".mjs", ".cjs",
-    ".ts", ".tsx", ".jsx", ".sh", ".ps1", ".toml", ".ini", ".cfg", ".txt",
+    ".ts", ".tsx", ".jsx", ".mts", ".cts", ".sh", ".ps1", ".toml", ".ini", ".cfg", ".txt", ".lock",
 }
+JAVASCRIPT_SOURCE_EXTENSIONS = {".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".mts", ".cts"}
+RUNTIME_SOURCE_EXTENSIONS = {".py", *JAVASCRIPT_SOURCE_EXTENSIONS}
+RUNTIME_SCRIPT_EXTENSIONS = {".sh", ".ps1"}
+DEPENDENCY_FILE_NAMES = {
+    "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock",
+    "pyproject.toml", "poetry.lock", "uv.lock", "Pipfile", "Pipfile.lock",
+}
+RUNTIME_ENTRY_FILE_NAMES = {"Makefile", "Dockerfile", "Procfile", "Taskfile.yml", "justfile"}
 MCP_NAME = re.compile(r"\bmcp__[A-Za-z0-9._-]+__[A-Za-z0-9._*:-]+\b")
 SINGLE_SLASH_HOST_PATH = re.compile(r"\b(Read|Edit|Write|Glob|NotebookEdit|MultiEdit)\(/(?:etc|home|Users|var|tmp|opt|srv|data|mnt|root|c/)([^)]*)\)")
 PATH_QUALIFIED_IGNORED_TOOL = re.compile(r"\b(Write|Glob|NotebookEdit|MultiEdit)\([^)]*[/*~][^)]*\)")
@@ -67,6 +83,113 @@ TASK_TOKEN = re.compile(r"\bTask(?:\(|\b)")
 HOOK_PLACEHOLDER = re.compile(r"\$\{CLAUDE_(?:PROJECT_DIR|PLUGIN_ROOT|PLUGIN_DATA)\}")
 BROAD_MCP_ALLOW = re.compile(r"^mcp__[A-Za-z0-9._-]+__(?:\*|.+\*)$")
 BROAD_SHELL_ALLOW = re.compile(r"^(?:Bash|PowerShell)\((?:bash|sh|python|python3|node|perl|ruby|env|printenv|cat|find|jq) \*\)$")
+CLAUDE_CLI_INVOCATION = re.compile(r"(?<![\w.-])claude\s+(?:-p|--print|--agent|--worktree)\b")
+CLAUDE_CLI_OPTIONS = {"-p", "--print", "--agent", "--worktree"}
+
+
+class TargetValidationError(ValueError):
+    """当 --target 无法定位可读的 Claude 项目时抛出。"""
+
+
+@dataclass(frozen=True)
+class TargetSelection:
+    requested_target: str
+    root: Path
+    target_kind: str
+    claude_dir: Path | None = None
+
+
+def normalize_target(requested_target: str) -> TargetSelection:
+    """校验 --target，并将项目级 .claude 目录规范化到项目根。"""
+    if not requested_target or not requested_target.strip():
+        raise TargetValidationError("Target must not be empty")
+
+    try:
+        requested_path = Path(requested_target).expanduser()
+        lexical_path = Path(os.path.abspath(requested_path))
+        resolved_path = requested_path.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise TargetValidationError(f"Target does not exist or cannot be resolved: {requested_target} ({exc})") from exc
+
+    if not resolved_path.is_dir():
+        raise TargetValidationError(f"Target must be a directory: {requested_target}")
+
+    if any(part in HOST_CONFIG_DIRS for part in (*lexical_path.parts, *resolved_path.parts)):
+        raise TargetValidationError(f"Codex host configuration is not a Claude project target: {requested_target}")
+
+    try:
+        lexical_user_claude_dir = Path(os.path.abspath(Path.home() / ".claude"))
+        user_claude_dir = lexical_user_claude_dir.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        lexical_user_claude_dir = Path.home() / ".claude"
+        user_claude_dir = Path.home() / ".claude"
+    if (
+        lexical_path == lexical_user_claude_dir
+        or lexical_user_claude_dir in lexical_path.parents
+        or resolved_path == user_claude_dir
+        or user_claude_dir in resolved_path.parents
+    ):
+        raise TargetValidationError(
+            f"User-level Claude configuration is not a project review target: {requested_target}"
+        )
+
+    if (
+        (".claude" in lexical_path.parts and lexical_path.name != ".claude")
+        or (".claude" in resolved_path.parts and resolved_path.name != ".claude")
+    ):
+        raise TargetValidationError(
+            "Target must be a Claude project root or its direct .claude directory: "
+            f"{requested_target}"
+        )
+
+    if requested_path.name == ".claude":
+        try:
+            root = lexical_path.parent.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise TargetValidationError(
+                f"Claude project root does not exist or cannot be resolved: {lexical_path.parent} ({exc})"
+            ) from exc
+        claude_dir = resolved_path
+        target_kind = "project-claude-dir"
+    elif resolved_path.name == ".claude":
+        root = resolved_path.parent
+        claude_dir = resolved_path
+        target_kind = "project-claude-dir"
+    else:
+        root = resolved_path
+        claude_dir = None
+        target_kind = "project-root"
+
+    project_claude = root / ".claude"
+    if project_claude.is_symlink():
+        try:
+            linked_claude = project_claude.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise TargetValidationError(
+                f"Project .claude directory cannot be resolved: {project_claude} ({exc})"
+            ) from exc
+        if linked_claude == user_claude_dir or user_claude_dir in linked_claude.parents:
+            raise TargetValidationError(
+                f"Project .claude must not link to user-level Claude configuration: {requested_target}"
+            )
+        if any(part in HOST_CONFIG_DIRS for part in linked_claude.parts):
+            raise TargetValidationError(
+                f"Project .claude must not link to Codex host configuration: {requested_target}"
+            )
+        if not linked_claude.is_dir():
+            raise TargetValidationError(f"Project .claude target must be a directory: {project_claude}")
+        claude_dir = linked_claude
+
+    for path in {resolved_path, root, *([claude_dir] if claude_dir is not None else [])}:
+        if not path.is_dir() or not os.access(path, os.R_OK | os.X_OK):
+            raise TargetValidationError(f"Target directory is not readable: {requested_target}")
+
+    return TargetSelection(
+        requested_target=requested_target,
+        root=root,
+        target_kind=target_kind,
+        claude_dir=claude_dir,
+    )
 
 
 @dataclass
@@ -89,11 +212,27 @@ class Finding:
 
 
 class ReviewScanner:
-    def __init__(self, root: Path, runtime: str, include_eval_targets: bool = False):
+    def __init__(self, root: Path, runtime: str, include_eval_targets: bool = False,
+                 requested_target: str | None = None, target_kind: str = "project-root",
+                 claude_dir: Path | None = None):
         self.root = root.resolve()
+        project_claude = self.root / ".claude"
+        self.claude_dir = None
+        if project_claude.is_symlink():
+            try:
+                linked_claude = project_claude.resolve(strict=True)
+                if linked_claude.is_dir():
+                    self.claude_dir = linked_claude
+            except (OSError, RuntimeError):
+                pass
+        elif claude_dir is not None and claude_dir.resolve() != project_claude.resolve(strict=False):
+            self.claude_dir = claude_dir.resolve()
+        self.requested_target = requested_target if requested_target is not None else str(root)
+        self.target_kind = target_kind
         self.runtime_requested = runtime
         self.include_eval_targets = include_eval_targets
         self.files: list[Path] = []
+        self.logical_paths: dict[Path, str] = {}
         self.text: dict[Path, str] = {}
         self.findings: list[Finding] = []
         self.settings: list[tuple[Path, dict[str, Any]]] = []
@@ -101,21 +240,14 @@ class ReviewScanner:
         self.agent_tools: dict[Path, list[str]] = {}
         self.runtime_mode = "unknown"
         self.runtime_evidence: list[Evidence] = []
+        self.sdk_files: list[Path] = []
         self.eval_assets: list[str] = []
-        self.claude_version = self.detect_claude_version()
-
-    def detect_claude_version(self) -> str | None:
-        exe = shutil.which("claude")
-        if not exe:
-            return None
-        try:
-            cp = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=3, check=False)
-            out = (cp.stdout or cp.stderr or "").strip()
-            return out[:200] if out else None
-        except Exception:
-            return None
+        # 静态 helper 不执行 PATH 中的任何二进制；宿主可在受信环境中另行记录版本。
+        self.claude_version: str | None = None
 
     def rel(self, p: Path) -> str:
+        if p in self.logical_paths:
+            return self.logical_paths[p]
         try:
             return p.resolve().relative_to(self.root).as_posix()
         except Exception:
@@ -155,20 +287,115 @@ class ReviewScanner:
             confidence: str = "candidate") -> None:
         self.findings.append(Finding(fid, severity, cls, title, message, list(evidence), official_source, confidence))
 
-    def collect_files(self) -> None:
-        for base, dirs, names in os.walk(self.root, followlinks=False):
+    @staticmethod
+    def is_eval_file(p: Path) -> bool:
+        name = p.name.lower()
+        if p.suffix.lower() == ".py":
+            return name in {"conftest.py", "noxfile.py"} or name.startswith("test_") or name.endswith("_test.py")
+        if p.suffix.lower() in JAVASCRIPT_SOURCE_EXTENSIONS:
+            return bool(re.search(r"\.(?:test|spec)\.(?:[cm]?[jt]sx?)$", name))
+        return False
+
+    @staticmethod
+    def is_claude_config_path(path: Path) -> bool:
+        return bool(path.parts) and path.parts[0] == ".claude"
+
+    @staticmethod
+    def linked_claude_directory_allowed(relative: Path) -> bool:
+        if not relative.parts:
+            return True
+        head = relative.parts[0]
+        if head in {"rules", "commands"}:
+            return True
+        if head == "skills":
+            return len(relative.parts) <= 2
+        if head in {"agents", "output-styles"}:
+            return len(relative.parts) == 1
+        return False
+
+    @staticmethod
+    def linked_claude_file_allowed(relative: Path) -> bool:
+        parts = relative.parts
+        if len(parts) == 1:
+            return relative.name in {"CLAUDE.md", "settings.json", "settings.local.json"}
+        head = parts[0]
+        if head == "rules":
+            return relative.suffix == ".md"
+        if head == "skills":
+            return len(parts) == 3 and relative.name == "SKILL.md"
+        if head == "agents":
+            return len(parts) == 2 and relative.suffix == ".md"
+        if head == "commands":
+            return relative.suffix == ".md"
+        if head == "output-styles":
+            return len(parts) == 2 and relative.suffix == ".md"
+        return False
+
+    def collect_tree(self, scan_root: Path, logical_prefix: str | None = None) -> None:
+        restricted_linked_claude = logical_prefix == ".claude"
+        for base, dirs, names in os.walk(scan_root, followlinks=False):
             b = Path(base)
             keep_dirs = []
             for d in dirs:
-                if d in BUILD_DIRS:
+                if d in BUILD_DIRS or d in HOST_CONFIG_DIRS:
                     continue
-                if not self.include_eval_targets and d.lower() in EVAL_DIR_NAMES:
+                if logical_prefix is None and b == self.root and d == ".claude" and (b / d).is_symlink():
+                    continue
+                directory = b / d
+                relative_directory = directory.relative_to(scan_root)
+                if restricted_linked_claude and not self.linked_claude_directory_allowed(relative_directory):
+                    continue
+                logical_directory = relative_directory
+                if logical_prefix is not None:
+                    logical_directory = Path(logical_prefix) / logical_directory
+                if directory.is_symlink():
+                    logical_text = logical_directory.as_posix()
+                    if logical_text == ".claude" or logical_text.startswith(".claude/"):
+                        self.add(
+                            "A-CONFIG-SYMLINK",
+                            "P2",
+                            "UNVERIFIED",
+                            "Claude configuration directory is a symbolic link",
+                            "Static review does not follow nested configuration directory symbolic links. Verify the target and effective contents separately.",
+                            [Evidence(logical_text, 1, "symbolic link target not read")],
+                        )
+                    continue
+                if (
+                    not self.include_eval_targets
+                    and not self.is_claude_config_path(logical_directory)
+                    and d.lower() in EVAL_DIR_NAMES
+                ):
                     continue
                 keep_dirs.append(d)
             dirs[:] = keep_dirs
             for name in names:
                 p = b / name
+                if name in {"AGENTS.md", "AGENTS.override.md"}:
+                    continue
+                logical = p.relative_to(scan_root)
+                if restricted_linked_claude and not self.linked_claude_file_allowed(logical):
+                    continue
+                if logical_prefix is not None:
+                    logical = Path(logical_prefix) / logical
+                if (
+                    not self.include_eval_targets
+                    and not self.is_claude_config_path(logical)
+                    and self.is_eval_file(p)
+                ):
+                    continue
+                if logical_prefix is not None or p.is_symlink():
+                    logical = logical.as_posix()
+                    self.logical_paths[p] = logical
                 if p.is_symlink():
+                    if self.classify(p) != "other":
+                        self.add(
+                            "A-CONFIG-SYMLINK",
+                            "P2",
+                            "UNVERIFIED",
+                            "Claude configuration file is a symbolic link",
+                            "Static review does not follow configuration file symbolic links. Verify the target and effective contents separately.",
+                            [Evidence(self.rel(p), 1, "symbolic link target not read")],
+                        )
                     continue
                 try:
                     if p.stat().st_size > 5 * 1024 * 1024:
@@ -176,9 +403,18 @@ class ReviewScanner:
                 except OSError:
                     continue
                 if p.suffix in TEXT_EXTENSIONS or name in {
-                    "CLAUDE.md", "CLAUDE.local.md", ".mcp.json", ".worktreeinclude", "Makefile"
+                    "CLAUDE.md", "CLAUDE.local.md", ".mcp.json", ".worktreeinclude", "Makefile",
+                    *DEPENDENCY_FILE_NAMES, *RUNTIME_ENTRY_FILE_NAMES,
                 }:
+                    if logical_prefix is not None:
+                        resolved = p.resolve()
+                        self.files = [existing for existing in self.files if existing.resolve() != resolved]
                     self.files.append(p)
+
+    def collect_files(self) -> None:
+        self.collect_tree(self.root)
+        if self.claude_dir is not None:
+            self.collect_tree(self.claude_dir, ".claude")
 
     def classify(self, p: Path) -> str:
         r = self.rel(p)
@@ -256,27 +492,710 @@ class ReviewScanner:
             return [v.strip()] if v.strip() else []
         return [str(v)]
 
+    def is_runtime_candidate(self, p: Path) -> bool:
+        if self.classify(p) != "other":
+            return False
+        name = p.name
+        return (
+            p.suffix.lower() in RUNTIME_SOURCE_EXTENSIONS | RUNTIME_SCRIPT_EXTENSIONS
+            or name in DEPENDENCY_FILE_NAMES
+            or name in RUNTIME_ENTRY_FILE_NAMES
+            or (name.startswith("requirements") and p.suffix.lower() == ".txt")
+            or name.startswith("Dockerfile.")
+            or name.startswith("docker-compose.")
+            or name.startswith("compose.")
+        )
+
+    def pyproject_dependency_evidence(self, p: Path) -> list[Evidence]:
+        if tomllib is not None:
+            try:
+                tomllib.loads(self.read(p))
+            except Exception:
+                return []
+        lines = self.read(p).splitlines()
+        hit_lines: list[int] = []
+        section = ""
+        dependency_list_open = False
+        dependency_literal = re.compile(
+            r"[\"']claude-agent-sdk(?:\[[^]]+\])?(?:\s*[<>=!~].*?)?[\"']",
+            re.I,
+        )
+        for index, line in enumerate(lines, 1):
+            active = line.split("#", 1)[0].strip()
+            section_match = re.match(r"^\[([^]]+)\]$", active)
+            if section_match:
+                section = section_match.group(1)
+                dependency_list_open = False
+                continue
+            if section in {"project", "project.optional-dependencies"}:
+                assignment = re.match(r"^([A-Za-z0-9_.-]+)\s*=\s*(.*)$", active)
+                starts_dependency_list = bool(
+                    assignment
+                    and "[" in assignment.group(2)
+                    and (section == "project.optional-dependencies" or assignment.group(1) == "dependencies")
+                )
+                if starts_dependency_list:
+                    dependency_list_open = assignment.group(2).count("[") > assignment.group(2).count("]")
+                    if dependency_literal.search(assignment.group(2)):
+                        hit_lines.append(index)
+                elif dependency_list_open:
+                    if dependency_literal.search(active):
+                        hit_lines.append(index)
+                    dependency_list_open = active.count("[") + int(dependency_list_open) > active.count("]")
+            if section == "tool.poetry.dependencies" and re.match(
+                r"^[\"']?claude-agent-sdk(?:\[[^]]+\])?[\"']?\s*=", active, re.I
+            ):
+                hit_lines.append(index)
+        return [self.ev(p, line) for line in sorted(set(hit_lines))[:8]]
+
+    def dependency_evidence(self, p: Path) -> list[Evidence]:
+        if p.name == "pyproject.toml":
+            return self.pyproject_dependency_evidence(p)
+        hits: list[Evidence] = []
+        requirement = p.name.startswith("requirements") and p.suffix.lower() == ".txt"
+        for i, line in enumerate(self.read(p).splitlines(), 1):
+            active = line.split("#", 1)[0].strip()
+            if not active:
+                continue
+            if requirement:
+                matched = bool(re.match(r"^(?:claude-agent-sdk|claude_agent_sdk)(?:\[[^]]+\])?\s*(?:[<>=!~].*)?(?:;.*)?$", active, re.I))
+            elif p.name == "package.json":
+                matched = bool(re.search(r"[\"']@anthropic-ai/claude-agent-sdk[\"']\s*:", active))
+            else:
+                matched = bool(
+                    re.search(
+                        r"[\"']@anthropic-ai/claude-agent-sdk"
+                        r"(?:@[^\"']+)?[\"']\s*[:=]",
+                        active,
+                    )
+                    or re.match(
+                        r"^(?:name\s*=\s*[\"'])?claude-agent-sdk"
+                        r"(?:[\"']|\s*[:=@<>=!~])",
+                        active,
+                        re.I,
+                    )
+                    or re.search(
+                        r"[\"']claude-agent-sdk(?:\[[^]]+\])?"
+                        r"(?:[<>=!~].*?)?[\"']\s*(?:,|\]|$)",
+                        active,
+                        re.I,
+                    )
+                    or re.match(
+                        r"^claude-agent-sdk\s*=\s*[\"'][^\"']+[\"']",
+                        active,
+                        re.I,
+                    )
+                )
+            if matched:
+                hits.append(self.ev(p, i, line))
+                if len(hits) >= 8:
+                    break
+        return hits
+
+    def python_sdk_evidence(self, p: Path) -> list[Evidence]:
+        if "claude_agent_sdk" not in self.read(p):
+            return []
+        try:
+            tree = ast.parse(self.read(p), filename=str(p))
+        except (SyntaxError, ValueError):
+            hit_lines: set[int] = set()
+            try:
+                tokens = list(tokenize.generate_tokens(io.StringIO(self.read(p)).readline))
+            except (tokenize.TokenError, IndentationError):
+                tokens = []
+            significant = [token for token in tokens if token.type not in {
+                tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT,
+                tokenize.ENCODING,
+            }]
+            for index, token in enumerate(significant):
+                if token.type != tokenize.NAME or token.string not in {"from", "import"}:
+                    continue
+                following = significant[index + 1:index + 3]
+                if following and following[0].type == tokenize.NAME and following[0].string == "claude_agent_sdk":
+                    hit_lines.add(token.start[0])
+            return [self.ev(p, line) for line in sorted(hit_lines)[:8]]
+        lines = self.read(p).splitlines()
+        hit_lines: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                if any(alias.name == "claude_agent_sdk" or alias.name.startswith("claude_agent_sdk.") for alias in node.names):
+                    hit_lines.add(node.lineno)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and (node.module == "claude_agent_sdk" or node.module.startswith("claude_agent_sdk.")):
+                    hit_lines.add(node.lineno)
+        return [self.ev(p, line, lines[line - 1]) for line in sorted(hit_lines)[:8]]
+
+    @staticmethod
+    def javascript_tokens(text: str) -> list[tuple[str, str, int]]:
+        tokens: list[tuple[str, str, int]] = []
+        i = 0
+        line = 1
+        while i < len(text):
+            ch = text[i]
+            nxt = text[i + 1] if i + 1 < len(text) else ""
+            if ch.isspace():
+                line += ch == "\n"
+                i += 1
+            elif ch == "/" and nxt == "/":
+                end = text.find("\n", i + 2)
+                i = len(text) if end < 0 else end
+            elif ch == "/" and nxt == "*":
+                end = text.find("*/", i + 2)
+                segment = text[i:] if end < 0 else text[i:end + 2]
+                line += segment.count("\n")
+                i = len(text) if end < 0 else end + 2
+            elif ch in {"'", '"', "`"}:
+                quote = ch
+                start_line = line
+                value: list[str] = []
+                i += 1
+                while i < len(text):
+                    ch = text[i]
+                    if ch == "\\" and i + 1 < len(text):
+                        value.extend((ch, text[i + 1]))
+                        line += text[i + 1] == "\n"
+                        i += 2
+                    elif ch == quote:
+                        i += 1
+                        break
+                    else:
+                        value.append(ch)
+                        line += ch == "\n"
+                        i += 1
+                tokens.append(("template" if quote == "`" else "string", "".join(value), start_line))
+            elif ch.isalpha() or ch in {"_", "$"}:
+                start = i
+                while i < len(text) and (text[i].isalnum() or text[i] in {"_", "$"}):
+                    i += 1
+                tokens.append(("name", text[start:i], line))
+            else:
+                tokens.append(("punct", ch, line))
+                i += 1
+        return tokens
+
+    def javascript_sdk_evidence(self, p: Path) -> list[Evidence]:
+        if "@anthropic-ai/claude-agent-sdk" not in self.read(p):
+            return []
+        tokens = self.javascript_tokens(self.read(p))
+        hit_lines: set[int] = set()
+        module = "@anthropic-ai/claude-agent-sdk"
+        for index, token in enumerate(tokens):
+            if token[:2] not in {("name", "import"), ("name", "require")}:
+                continue
+            line = token[2]
+            following = tokens[index + 1:index + 40]
+            if following and following[0][:2] == ("punct", "("):
+                if len(following) > 1 and following[1][:2] == ("string", module):
+                    hit_lines.add(line)
+            elif token[1] == "import":
+                for offset, candidate in enumerate(following):
+                    if candidate[:2] == ("string", module) and (
+                        offset == 0 or following[offset - 1][:2] == ("name", "from")
+                    ):
+                        hit_lines.add(line)
+                        break
+                    if candidate[:2] == ("punct", ";"):
+                        break
+        return [self.ev(p, line) for line in sorted(hit_lines)[:8]]
+
+    @staticmethod
+    def command_uses_claude_cli(arguments: list[str]) -> bool:
+        if not arguments or Path(arguments[0]).name != "claude":
+            return False
+        return any(option in CLAUDE_CLI_OPTIONS for option in arguments[1:])
+
+    def python_cli_evidence(self, p: Path) -> Evidence | None:
+        text = self.read(p)
+        if "claude" not in text:
+            return None
+        try:
+            tree = ast.parse(text, filename=str(p))
+        except (SyntaxError, ValueError):
+            return None
+
+        imported_process_calls: set[str] = set()
+        module_aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in {"os", "subprocess"}:
+                        module_aliases[alias.asname or alias.name] = alias.name
+            elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+                for alias in node.names:
+                    if alias.name in {"call", "check_call", "check_output", "Popen", "run"}:
+                        imported_process_calls.add(alias.asname or alias.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            is_process_call = False
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+            ):
+                module = module_aliases.get(node.func.value.id)
+                is_process_call = (
+                    module == "subprocess"
+                    and node.func.attr in {"call", "check_call", "check_output", "Popen", "run"}
+                ) or (module == "os" and node.func.attr == "system")
+            elif isinstance(node.func, ast.Name):
+                is_process_call = node.func.id in imported_process_calls
+            if not is_process_call:
+                continue
+
+            first = node.args[0]
+            arguments: list[str] = []
+            if isinstance(first, (ast.List, ast.Tuple)):
+                for element in first.elts:
+                    if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+                        arguments = []
+                        break
+                    arguments.append(element.value)
+            elif isinstance(first, ast.Constant) and isinstance(first.value, str):
+                try:
+                    arguments = shlex.split(first.value)
+                except ValueError:
+                    arguments = []
+            if self.command_uses_claude_cli(arguments):
+                return self.ev(p, node.lineno)
+        return None
+
+    @staticmethod
+    def javascript_child_process_bindings(
+        tokens: list[tuple[str, str, int]],
+    ) -> tuple[
+        dict[int, dict[str, str | None]],
+        dict[int, int | None],
+        list[int],
+    ]:
+        process_calls = {"exec", "execFile", "execSync", "spawn", "spawnSync"}
+        process_modules = {"child_process", "node:child_process"}
+        opening = {"(": ")", "[": "]", "{": "}"}
+        closing = {value: key for key, value in opening.items()}
+        pairs: dict[int, int] = {}
+        stacks: dict[str, list[int]] = {key: [] for key in opening}
+        for index, token in enumerate(tokens):
+            if token[0] != "punct":
+                continue
+            value = token[1]
+            if value in opening:
+                stacks[value].append(index)
+            elif value in closing and stacks[closing[value]]:
+                start = stacks[closing[value]].pop()
+                pairs[start] = index
+                pairs[index] = start
+
+        def previous_boundary(index: int) -> int:
+            while index > 0 and tokens[index - 1][:2] not in {
+                ("punct", ";"), ("punct", "{"), ("punct", "}"),
+            }:
+                index -= 1
+            return index
+
+        non_scope_braces: set[int] = set()
+        for start, end in list(pairs.items()):
+            if start > end or tokens[start][:2] != ("punct", "{"):
+                continue
+            boundary = previous_boundary(start)
+            prefix = tokens[boundary:start]
+            suffix = tokens[end + 1:min(len(tokens), end + 4)]
+            if any(token[:2] == ("name", "import") for token in prefix) \
+                    and any(token[:2] == ("name", "from") for token in suffix):
+                non_scope_braces.add(start)
+            elif suffix and suffix[0][:2] == ("punct", "=") \
+                    and any(token[:2] in {
+                        ("name", "const"), ("name", "let"), ("name", "var"),
+                    } for token in prefix):
+                non_scope_braces.add(start)
+
+        scope_parent: dict[int, int | None] = {0: None}
+        scope_bindings: dict[int, dict[str, str | None]] = {0: {}}
+        token_scope = [0] * len(tokens)
+        scope_open_to_id: dict[int, int] = {}
+        scope_stack = [0]
+        next_scope = 1
+        for index, token in enumerate(tokens):
+            token_scope[index] = scope_stack[-1]
+            if token[:2] == ("punct", "{") and index not in non_scope_braces:
+                scope_id = next_scope
+                next_scope += 1
+                scope_open_to_id[index] = scope_id
+                scope_parent[scope_id] = scope_stack[-1]
+                scope_bindings[scope_id] = {}
+                scope_stack.append(scope_id)
+            elif token[:2] == ("punct", "}"):
+                start = pairs.get(index)
+                if start in scope_open_to_id and len(scope_stack) > 1:
+                    scope_stack.pop()
+
+        def resolve(scope: int, name: str) -> str | None:
+            current: int | None = scope
+            while current is not None:
+                if name in scope_bindings[current]:
+                    return scope_bindings[current][name]
+                current = scope_parent[current]
+            return None
+
+        def statement_end(index: int) -> int:
+            paren = bracket = brace = 0
+            while index < len(tokens):
+                token = tokens[index]
+                if token[0] == "punct":
+                    if token[1] == "(":
+                        paren += 1
+                    elif token[1] == ")":
+                        paren = max(0, paren - 1)
+                    elif token[1] == "[":
+                        bracket += 1
+                    elif token[1] == "]":
+                        bracket = max(0, bracket - 1)
+                    elif token[1] == "{":
+                        brace += 1
+                    elif token[1] == "}":
+                        if brace == 0:
+                            return index
+                        brace -= 1
+                    elif token[1] == ";" and paren == bracket == brace == 0:
+                        return index
+                index += 1
+            return len(tokens)
+
+        declarations: list[tuple[int, int, str, int, int]] = []
+        declaration_keywords = {"const", "let", "var"}
+        for index, token in enumerate(tokens):
+            if token[0] != "name" or token[1] not in declaration_keywords:
+                continue
+            scope = token_scope[index]
+            lhs = index + 1
+            end = statement_end(lhs)
+            if lhs >= end:
+                continue
+            if tokens[lhs][0] == "name":
+                name = tokens[lhs][1]
+                scope_bindings[scope][name] = None
+                if lhs + 1 < end and tokens[lhs + 1][:2] == ("punct", "="):
+                    declarations.append((index, scope, name, lhs + 2, end))
+            elif tokens[lhs][:2] == ("punct", "{") and lhs in pairs:
+                close = pairs[lhs]
+                if close >= end:
+                    continue
+                pattern = tokens[lhs + 1:close]
+                offset = 0
+                while offset < len(pattern):
+                    candidate = pattern[offset]
+                    if candidate[0] != "name":
+                        offset += 1
+                        continue
+                    bound = candidate[1]
+                    if offset + 2 < len(pattern) \
+                            and pattern[offset + 1][:2] == ("punct", ":") \
+                            and pattern[offset + 2][0] == "name":
+                        bound = pattern[offset + 2][1]
+                        offset += 2
+                    scope_bindings[scope][bound] = None
+                    offset += 1
+                if close + 1 < end and tokens[close + 1][:2] == ("punct", "="):
+                    declarations.append((index, scope, "", close + 2, end))
+
+        for index, token in enumerate(tokens):
+            if token[:2] != ("name", "function"):
+                continue
+            cursor = index + 1
+            if cursor < len(tokens) and tokens[cursor][0] == "name":
+                scope_bindings[token_scope[index]][tokens[cursor][1]] = None
+                cursor += 1
+            while cursor < len(tokens) and tokens[cursor][:2] != ("punct", "("):
+                if tokens[cursor][:2] in {("punct", ";"), ("punct", "{")}:
+                    break
+                cursor += 1
+            close = pairs.get(cursor)
+            if close is None:
+                continue
+            body = close + 1
+            while body < len(tokens) and tokens[body][:2] != ("punct", "{"):
+                body += 1
+            body_scope = scope_open_to_id.get(body)
+            if body_scope is None:
+                continue
+            for parameter in tokens[cursor + 1:close]:
+                if parameter[0] == "name":
+                    scope_bindings[body_scope][parameter[1]] = None
+
+        for index in range(len(tokens) - 1):
+            if tokens[index][:2] != ("punct", "=") or tokens[index + 1][:2] != ("punct", ">"):
+                continue
+            body = index + 2
+            if body >= len(tokens) or tokens[body][:2] != ("punct", "{"):
+                continue
+            body_scope = scope_open_to_id.get(body)
+            if body_scope is None:
+                continue
+            if index > 0 and tokens[index - 1][:2] == ("punct", ")"):
+                start = pairs.get(index - 1)
+                parameters = tokens[start + 1:index - 1] if start is not None else []
+            else:
+                parameters = tokens[index - 1:index]
+            for parameter in parameters:
+                if parameter[0] == "name":
+                    scope_bindings[body_scope][parameter[1]] = None
+
+        def add_named_imports(
+            scope: int, segment: list[tuple[str, str, int]], separator: str,
+        ) -> None:
+            offset = 0
+            while offset < len(segment):
+                candidate = segment[offset]
+                if candidate[0] != "name" or candidate[1] not in process_calls:
+                    offset += 1
+                    continue
+                alias = candidate[1]
+                if offset + 2 < len(segment) \
+                        and segment[offset + 1][:2] in {("name", "as"), ("punct", separator)} \
+                        and segment[offset + 2][0] == "name":
+                    alias = segment[offset + 2][1]
+                    offset += 2
+                scope_bindings[scope][alias] = candidate[1]
+                offset += 1
+
+        for index, token in enumerate(tokens):
+            if token[:2] != ("name", "import"):
+                continue
+            end = statement_end(index + 1)
+            statement = tokens[index + 1:end]
+            module_positions = [
+                offset for offset, candidate in enumerate(statement)
+                if candidate[0] == "string" and candidate[1] in process_modules
+            ]
+            if not module_positions:
+                continue
+            module_pos = module_positions[0]
+            spec = statement[:module_pos]
+            if spec and spec[-1][:2] == ("name", "from"):
+                spec = spec[:-1]
+            scope = token_scope[index]
+            if spec and spec[0][:2] == ("punct", "{"):
+                add_named_imports(scope, spec, ":")
+            elif len(spec) >= 3 and spec[0][:2] == ("punct", "*") \
+                    and spec[1][:2] == ("name", "as") and spec[2][0] == "name":
+                scope_bindings[scope][spec[2][1]] = "namespace"
+            elif spec and spec[0][0] == "name":
+                scope_bindings[scope][spec[0][1]] = "namespace"
+
+        # Declaration expressions are evaluated in source order. Pre-registered local
+        # names make lexical shadowing visible even before their declaration token.
+        for declaration_index, scope, name, expression_start, expression_end in declarations:
+            expression = tokens[expression_start:expression_end]
+            if not expression:
+                continue
+            is_require = len(expression) >= 3 \
+                and expression[0][:2] == ("name", "require") \
+                and expression[1][:2] == ("punct", "(") \
+                and expression[2][0] == "string" \
+                and expression[2][1] in process_modules
+            if not name:
+                if not is_require:
+                    continue
+                lhs_start = declaration_index + 1
+                lhs_close = pairs.get(lhs_start)
+                if lhs_close is not None:
+                    add_named_imports(scope, tokens[lhs_start + 1:lhs_close], ":")
+                continue
+
+            value: str | None = None
+            if is_require:
+                if len(expression) >= 6 \
+                        and expression[3][:2] == ("punct", ")") \
+                        and expression[4][:2] == ("punct", ".") \
+                        and expression[5][0] == "name" \
+                        and expression[5][1] in process_calls:
+                    value = expression[5][1]
+                elif len(expression) >= 4 and expression[3][:2] == ("punct", ")"):
+                    value = "namespace"
+            elif expression[0][0] == "name":
+                source = resolve(scope, expression[0][1])
+                if len(expression) >= 3 \
+                        and expression[1][:2] == ("punct", ".") \
+                        and expression[2][0] == "name" \
+                        and expression[2][1] in process_calls:
+                    if source == "namespace":
+                        value = expression[2][1]
+                elif source in process_calls:
+                    value = source
+            if value is not None:
+                scope_bindings[scope][name] = value
+
+        return scope_bindings, scope_parent, token_scope
+
+    @staticmethod
+    def javascript_call_arguments(
+        tokens: list[tuple[str, str, int]], open_paren: int, shell_form: bool,
+    ) -> list[str]:
+        groups: list[list[tuple[str, str, int]]] = [[]]
+        paren_depth = 1
+        bracket_depth = 0
+        brace_depth = 0
+        for token in tokens[open_paren + 1:]:
+            kind, value, _line = token
+            if kind == "punct":
+                if value == "(":
+                    paren_depth += 1
+                elif value == ")":
+                    paren_depth -= 1
+                    if paren_depth == 0:
+                        break
+                elif value == "[":
+                    bracket_depth += 1
+                elif value == "]":
+                    bracket_depth = max(0, bracket_depth - 1)
+                elif value == "{":
+                    brace_depth += 1
+                elif value == "}":
+                    brace_depth = max(0, brace_depth - 1)
+                elif value == "," and paren_depth == 1 and bracket_depth == 0 and brace_depth == 0:
+                    groups.append([])
+                    continue
+            groups[-1].append(token)
+
+        if not groups or len(groups[0]) != 1 or groups[0][0][0] != "string":
+            return []
+        executable_or_command = groups[0][0][1]
+        if shell_form:
+            try:
+                return shlex.split(executable_or_command)
+            except ValueError:
+                return []
+        arguments = [executable_or_command]
+        if len(groups) >= 2 and groups[1] and groups[1][0][:2] == ("punct", "["):
+            arguments.extend(token[1] for token in groups[1] if token[0] == "string")
+        return arguments
+
+    def javascript_cli_evidence(self, p: Path) -> Evidence | None:
+        text = self.read(p)
+        if "claude" not in text:
+            return None
+        tokens = self.javascript_tokens(text)
+        process_calls = {"exec", "execFile", "execSync", "spawn", "spawnSync"}
+        scope_bindings, scope_parent, token_scope = self.javascript_child_process_bindings(tokens)
+        if not any(bindings for bindings in scope_bindings.values()):
+            return None
+
+        def resolve(scope: int, name: str) -> str | None:
+            current: int | None = scope
+            while current is not None:
+                if name in scope_bindings[current]:
+                    return scope_bindings[current][name]
+                current = scope_parent[current]
+            return None
+
+        for index, token in enumerate(tokens):
+            method: str | None = None
+            open_paren: int | None = None
+            if token[0] == "name" and index + 1 < len(tokens) \
+                    and tokens[index + 1][:2] == ("punct", "("):
+                resolved = resolve(token_scope[index], token[1])
+                if resolved in process_calls:
+                    method = resolved
+                    open_paren = index + 1
+            elif (
+                token[0] == "name"
+                and index + 3 < len(tokens)
+                and tokens[index + 1][:2] == ("punct", ".")
+                and tokens[index + 2][0] == "name"
+                and tokens[index + 2][1] in process_calls
+                and tokens[index + 3][:2] == ("punct", "(")
+                and resolve(token_scope[index], token[1]) == "namespace"
+            ):
+                method = tokens[index + 2][1]
+                open_paren = index + 3
+            if method is None or open_paren is None:
+                continue
+            arguments = self.javascript_call_arguments(
+                tokens, open_paren, shell_form=method in {"exec", "execSync"}
+            )
+            if self.command_uses_claude_cli(arguments):
+                return self.ev(p, token[2])
+        return None
+
+    def sdk_evidence(self, p: Path) -> list[Evidence]:
+        if not self.is_runtime_candidate(p):
+            return []
+        dependency = p.name in DEPENDENCY_FILE_NAMES or (
+            p.name.startswith("requirements") and p.suffix.lower() == ".txt"
+        )
+        if dependency:
+            return self.dependency_evidence(p)
+        if p.suffix.lower() == ".py":
+            return self.python_sdk_evidence(p)
+        if p.suffix.lower() in JAVASCRIPT_SOURCE_EXTENSIONS:
+            return self.javascript_sdk_evidence(p)
+        return []
+
+    def cli_evidence(self, p: Path) -> Evidence | None:
+        if "claude" not in self.read(p):
+            return None
+        if p.name == "package.json":
+            try:
+                scripts = json.loads(self.read(p)).get("scripts", {})
+            except (AttributeError, json.JSONDecodeError):
+                scripts = {}
+            if isinstance(scripts, dict):
+                for command in scripts.values():
+                    if not isinstance(command, str):
+                        continue
+                    try:
+                        arguments = shlex.split(command)
+                    except ValueError:
+                        arguments = []
+                    if self.command_uses_claude_cli(arguments):
+                        return self.find_line(p, command)
+            return None
+        if p.suffix.lower() == ".py":
+            return self.python_cli_evidence(p)
+        if p.suffix.lower() in JAVASCRIPT_SOURCE_EXTENSIONS:
+            return self.javascript_cli_evidence(p)
+        if p.suffix.lower() not in RUNTIME_SCRIPT_EXTENSIONS and p.name not in RUNTIME_ENTRY_FILE_NAMES \
+                and not p.name.startswith(("Dockerfile.", "docker-compose.", "compose.")):
+            return None
+        for i, line in enumerate(self.read(p).splitlines(), 1):
+            command = line
+            if p.name == "Dockerfile" or p.name.startswith("Dockerfile."):
+                directive = re.match(r"^\s*(?:ENTRYPOINT|CMD)\s+(.+?)\s*$", line, re.I)
+                if not directive:
+                    continue
+                command = directive.group(1)
+                if command.startswith("["):
+                    try:
+                        arguments = json.loads(command)
+                    except json.JSONDecodeError:
+                        arguments = []
+                    if (
+                        isinstance(arguments, list)
+                        and all(isinstance(argument, str) for argument in arguments)
+                        and self.command_uses_claude_cli(arguments)
+                    ):
+                        return self.ev(p, i, line)
+                    continue
+            try:
+                tokens = shlex.split(command, comments=True, posix=True)
+            except ValueError:
+                continue
+            if self.command_uses_claude_cli(tokens):
+                return self.ev(p, i, line)
+        return None
+
     def detect_runtime(self) -> None:
         sdk_hits: list[Evidence] = []
         cli_hits: list[Evidence] = []
-        patterns = [
-            re.compile(r"\bclaude_agent_sdk\b"),
-            re.compile(r"@anthropic-ai/claude-agent-sdk"),
-            re.compile(r"\bClaudeAgentOptions\b"),
-            re.compile(r"\bsetting_sources\b|\bsettingSources\b"),
-        ]
+        self.sdk_files = []
         for p in self.files:
-            if self.classify(p) != "other":
+            if not self.is_runtime_candidate(p):
                 continue
-            txt = self.read(p)
-            if any(rx.search(txt) for rx in patterns):
-                for i, line in enumerate(txt.splitlines(), 1):
-                    if any(rx.search(line) for rx in patterns):
-                        sdk_hits.append(self.ev(p, i, line))
-                        if len(sdk_hits) >= 8:
-                            break
-            if re.search(r"\bclaude\s+(?:-p|--print|--agent|--worktree)\b", txt):
-                cli_hits.append(self.find_line(p, "claude"))
+            file_sdk_hits = self.sdk_evidence(p)
+            if file_sdk_hits:
+                self.sdk_files.append(p)
+                sdk_hits.extend(file_sdk_hits)
+            cli_hit = self.cli_evidence(p)
+            if cli_hit is not None:
+                cli_hits.append(cli_hit)
         if self.runtime_requested != "auto":
             self.runtime_mode = self.runtime_requested
         elif sdk_hits and cli_hits:
@@ -295,9 +1214,13 @@ class ReviewScanner:
             p = self.root / name
             if p.exists():
                 candidates.append(name)
-        for base, dirs, _names in os.walk(self.root, followlinks=False):
+        for base, dirs, names in os.walk(self.root, followlinks=False):
             b = Path(base)
-            dirs[:] = [d for d in dirs if d not in BUILD_DIRS]
+            dirs[:] = [d for d in dirs if d not in BUILD_DIRS and d not in HOST_CONFIG_DIRS]
+            for name in names:
+                p = b / name
+                if self.is_eval_file(p):
+                    candidates.append(self.rel(p))
             for d in dirs:
                 if d.lower() in EVAL_DIR_NAMES:
                     candidates.append(self.rel(b / d))
@@ -500,20 +1423,43 @@ class ReviewScanner:
 
     def scan_referenced_hook_script(self, settings_path: Path, cmd: str, args: Any) -> None:
         tokens: list[str] = []
+        expanded_command = cmd.replace("${CLAUDE_PROJECT_DIR}", str(self.root))
+        try:
+            tokens.extend(shlex.split(expanded_command, posix=True))
+        except ValueError:
+            pass
         if isinstance(args, list):
             tokens.extend(str(x) for x in args)
-        tokens.append(cmd)
         for token in tokens:
             # Resolve only project-root placeholders and obvious relative paths; never execute.
             normalized = token.replace("${CLAUDE_PROJECT_DIR}", str(self.root)).strip().strip('"\'')
-            candidates = []
-            if normalized.startswith(str(self.root)):
-                candidates.append(Path(normalized))
+            candidates: list[Path] = []
+            raw_candidate = Path(normalized)
+            if raw_candidate.is_absolute():
+                candidates.append(raw_candidate)
             elif normalized.startswith("./"):
                 candidates.append(self.root / normalized[2:])
             for c in candidates:
-                if c.is_file() and c.suffix in {".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".ps1"}:
-                    self.scan_hook_script(c)
+                try:
+                    resolved = c.resolve(strict=True)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                authorized = False
+                for allowed_root in [self.root, *([self.claude_dir] if self.claude_dir is not None else [])]:
+                    try:
+                        resolved.relative_to(allowed_root)
+                        authorized = True
+                        break
+                    except ValueError:
+                        continue
+                if authorized and resolved.is_file() and resolved.suffix in {".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".ps1"}:
+                    if self.claude_dir is not None:
+                        try:
+                            logical = Path(".claude") / resolved.relative_to(self.claude_dir)
+                            self.logical_paths[resolved] = logical.as_posix()
+                        except ValueError:
+                            pass
+                    self.scan_hook_script(resolved)
 
     def scan_hook_script(self, p: Path) -> None:
         txt = self.read(p)
@@ -547,17 +1493,10 @@ class ReviewScanner:
     def scan_sdk_semantics(self) -> None:
         if self.runtime_mode not in {"agent-sdk", "both"}:
             return
-        sdk_files = []
-        for p in self.files:
-            if self.classify(p) != "other":
-                continue
-            txt = self.read(p)
-            if re.search(r"claude_agent_sdk|@anthropic-ai/claude-agent-sdk|ClaudeAgentOptions", txt):
-                sdk_files.append(p)
         explicit_sources = []
         allowed_without_lockdown = []
         bypass_combo = []
-        for p in sdk_files:
+        for p in self.sdk_files:
             txt = self.read(p)
             for i, line in enumerate(txt.splitlines(), 1):
                 if re.search(r"setting_sources\s*=|settingSources\s*:", line):
@@ -641,7 +1580,9 @@ class ReviewScanner:
         order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
         self.findings.sort(key=lambda f: (order.get(f.severity, 9), f.cls, f.id, f.evidence[0].path if f.evidence else ""))
         return {
+            "requested_target": self.requested_target,
             "target": str(self.root),
+            "target_kind": self.target_kind,
             "runtime": self.runtime_mode,
             "claude_version": self.claude_version,
             "runtime_evidence": [asdict(x) for x in self.runtime_evidence],
@@ -655,11 +1596,36 @@ def markdown(result: dict[str, Any]) -> str:
     counts: dict[str, int] = {}
     for f in findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+    def visible_text(value: Any) -> str:
+        visible: list[str] = []
+        for character in str(value):
+            codepoint = ord(character)
+            if character == "\r":
+                visible.append("\\r")
+            elif character == "\n":
+                visible.append("\\n")
+            elif character == "\t":
+                visible.append("\\t")
+            elif codepoint < 0x20 or codepoint == 0x7F:
+                visible.append(f"\\x{codepoint:02x}")
+            else:
+                visible.append(character)
+        return "".join(visible)
+
+    def inline_code(value: Any) -> str:
+        raw = visible_text(value)
+        longest = max((len(x) for x in re.findall(r"`+", raw)), default=0)
+        fence = "`" * (longest + 1)
+        padding = " " if raw.startswith("`") or raw.endswith("`") else ""
+        return f"{fence}{padding}{raw}{padding}{fence}"
+
     lines = [
         "# Static configuration scan",
         "",
-        f"- Target: `{result['target']}`",
-        f"- Runtime: `{result['runtime']}`",
+        f"- Requested target: {inline_code(result['requested_target'])}",
+        f"- Normalized target: {inline_code(result['target'])}",
+        f"- Target kind: `{result['target_kind']}`",
+        f"- Target Claude runtime: `{result['runtime']}`",
         f"- Claude version: `{result['claude_version'] or 'unknown'}`",
         f"- Findings: " + ", ".join(f"{k}={counts.get(k, 0)}" for k in ["P0", "P1", "P2", "P3"]),
         "- This output is a candidate inventory. Validate official findings against current official Claude docs before finalizing a review.",
@@ -668,41 +1634,53 @@ def markdown(result: dict[str, Any]) -> str:
         "",
     ]
     if result["eval_assets"]:
-        lines.extend(f"- `{x}`" for x in result["eval_assets"])
+        lines.extend(f"- {inline_code(x)}" for x in result["eval_assets"])
     else:
         lines.append("- None discovered automatically; accept a user-supplied safe eval command if optimization is requested.")
     lines.append("")
     for idx, f in enumerate(findings, 1):
         lines += [
-            f"## {idx}. [{f['severity']}] {f['id']} — {f['title']}",
+            f"## {idx}. [{f['severity']}] {f['id']} — {visible_text(f['title'])}",
             "",
             f"- Class: `{f['cls']}`",
             f"- Confidence: `{f['confidence']}`",
         ]
         if f.get("official_source"):
             lines.append(f"- Official source: `{f['official_source']}`")
-        lines += ["", f["message"], ""]
+        lines += ["", visible_text(f["message"]), ""]
         for e in f["evidence"]:
-            safe = e["text"].replace("`", "\\`")
-            lines.append(f"- `{e['path']}:{e['line']}` — `{safe}`")
+            location = f"{e['path']}:{e['line']}"
+            lines.append(f"- {inline_code(location)} — {inline_code(e['text'])}")
         lines.append("")
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", default=".", help="Project/workspace root; defaults to current directory")
+    ap.add_argument(
+        "--target",
+        default=".",
+        help="Claude project/workspace root or its project-level .claude directory; defaults to current directory",
+    )
     ap.add_argument("--runtime", choices=["auto", "cli", "agent-sdk", "both", "unknown"], default="auto")
     ap.add_argument("--include-eval-targets", action="store_true", help="Include test/eval directories in review targets (off by default)")
     ap.add_argument("--format", choices=["markdown", "json"], default="markdown")
     ap.add_argument("--output", help="Optional output file")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    root = Path(args.target)
-    if not root.is_dir():
-        print(f"Target must be a directory: {root}", file=sys.stderr)
+    try:
+        target = normalize_target(args.target)
+    except TargetValidationError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-    result = ReviewScanner(root, args.runtime, args.include_eval_targets).run()
+    result = ReviewScanner(
+        target.root,
+        args.runtime,
+        args.include_eval_targets,
+        requested_target=target.requested_target,
+        target_kind=target.target_kind,
+        claude_dir=target.claude_dir,
+    ).run()
     content = json.dumps(result, ensure_ascii=False, indent=2) if args.format == "json" else markdown(result)
     if args.output:
         Path(args.output).write_text(content, encoding="utf-8")

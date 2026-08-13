@@ -2,27 +2,83 @@
   "package": "agent-config-reviewer",
   "version": "2.0.0-final",
   "official_baseline_checked": "2026-08-13",
-  "portable_project_install": ".claude/skills/agent-config-reviewer/",
+  "review_subject": "claude-code-config",
+  "host_compatibility": {
+    "claude_code": {
+      "project_install": ".claude/skills/agent-config-reviewer/",
+      "user_install": "~/.claude/skills/agent-config-reviewer/",
+      "invocation": "/agent-config-reviewer"
+    },
+    "codex": {
+      "project_install": ".agents/skills/agent-config-reviewer/",
+      "user_install": "$HOME/.agents/skills/agent-config-reviewer/",
+      "invocation": "$agent-config-reviewer"
+    }
+  },
+  "target_contract": {
+    "default": "current-working-directory",
+    "accepted": [
+      "project-root",
+      "project-.claude-directory"
+    ],
+    "reject": [
+      "missing",
+      "unreadable",
+      "file",
+      "user-home-.claude",
+      "host-config-directory"
+    ],
+    "explicit_invalid_fallback": false
+  },
+  "package_roots": [
+    "agents",
+    "evals",
+    "references",
+    "scripts",
+    "templates",
+    "tests"
+  ],
+  "top_level_files": [
+    "LICENSE",
+    "README.md",
+    "README_en.md",
+    "SKILL.md"
+  ],
   "files": [
     {
+      "path": "LICENSE",
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
       "path": "README.md",
-      "bytes": 3007,
-      "sha256": "4583d36d4ee69a46b1a643e71ed3f2fad8d75787c632891cc25d92656baf23f4"
+      "bytes": 4534,
+      "sha256": "5781826b50241b6d810c5e5eab8d8a7c75b5d323f2354bf5661caa36b4c2c8dc"
+    },
+    {
+      "path": "README_en.md",
+      "bytes": 4827,
+      "sha256": "4c9939ecbd79d6154a7102cbb31e5e780fbd0bbf1169824584f751b6e5f3d78f"
     },
     {
       "path": "SKILL.md",
-      "bytes": 12769,
-      "sha256": "19e1b7cae11955593ca42e9a7172e0b2408093fa179ca01c784dc5d859e46b59"
+      "bytes": 14496,
+      "sha256": "c2214a7f33ab1fc9ad243fca9635162dc03c837fa4f72c5cd0b4da9f2db338fa"
+    },
+    {
+      "path": "agents/openai.yaml",
+      "bytes": 229,
+      "sha256": "9d0dd0edfb04721521d48d282ade84614a8233bbbc3c8f0b18aab79314b6e777"
     },
     {
       "path": "evals/cases.json",
-      "bytes": 2738,
-      "sha256": "8ecc0650be055818bab3637f1da035b3235672ec816ddc2f6b31ea247ac4ee85"
+      "bytes": 5098,
+      "sha256": "e4a9cc884bdccfa562db0c4ef3a155934ce3f4b50398f34106af366428a73f0b"
     },
     {
       "path": "references/check-catalog.md",
-      "bytes": 6869,
-      "sha256": "3809eea9a9934e329de6b547f0d22514b3e1bed336208cfbab9ee48ca152e45e"
+      "bytes": 7196,
+      "sha256": "17abc347c0efc7e2e716f4734b14c5ea40afc48a0304cea2ad9e197cdf7a4958"
     },
     {
       "path": "references/config-responsibility-matrix.md",
@@ -31,8 +87,13 @@
     },
     {
       "path": "references/eval-harness.md",
-      "bytes": 3140,
-      "sha256": "bcc593fae3203ee1d76a0acc24f6626411c71fe4d348c2f30813a342087e3a8b"
+      "bytes": 3203,
+      "sha256": "ccb17005cca5039117057ae1c1c6e0f1cf51e199df0221dcecf22f491b488e0e"
+    },
+    {
+      "path": "references/host-compatibility.md",
+      "bytes": 1723,
+      "sha256": "e9a696d4d2528cebc20ea623252b0a45f96bb4ab11814dc87c6e41baafec6bdc"
     },
     {
       "path": "references/non-normative-inspirations.md",
@@ -41,8 +102,8 @@
     },
     {
       "path": "references/official-compliance.md",
-      "bytes": 11182,
-      "sha256": "7e7764c315424265bf92d4f5406ae212fe47ce5cbeec25c1f7b6435f475f86e8"
+      "bytes": 11454,
+      "sha256": "8c04c78a3b52360d1a3d157c6f0ca7e2493d099c9b74a3ed491a0ed1a261536d"
     },
     {
       "path": "references/optimization-loop.md",
@@ -56,23 +117,33 @@
     },
     {
       "path": "references/review-methodology.md",
-      "bytes": 2556,
-      "sha256": "eca96796493e7b8452ad7d7601868da88ecf2d882d595f1d209316e347d6b6b5"
+      "bytes": 2888,
+      "sha256": "ceb701cd3285d18d7ab67ff0c7ecdeeb524d2615311bf79bf8870836e5fd8162"
     },
     {
       "path": "scripts/scan_project.py",
-      "bytes": 38801,
-      "sha256": "6a60f2e7d959679562ee5db0d0e5135f1f7f827184f1642a9fbfd64b6834f55e"
+      "bytes": 82514,
+      "sha256": "30f86e2bd29a0e4197d24abaf1ee5f6f40715da0e90ad305cdc228b60d56ab1f"
     },
     {
       "path": "scripts/self_check.py",
-      "bytes": 1846,
-      "sha256": "83ef9021dc5b088ae58d3e5409788b4f1ca0b5e11deccb0310d1a64489df4dd7"
+      "bytes": 20160,
+      "sha256": "abe62eafca0a944069e1e74249bc2d48480fdeadbed243fb504a84562e5a82c4"
     },
     {
       "path": "templates/review-report.md",
-      "bytes": 2018,
-      "sha256": "a14b0a10762750ea9851d6124eec097e21e02880adb7a6a1c7bafccb483f2c34"
+      "bytes": 2319,
+      "sha256": "e1f7b12ec486ed040c0e5d4425c70a066f47c30d4236c831a9739a30420036ba"
+    },
+    {
+      "path": "tests/test_compatibility.py",
+      "bytes": 37034,
+      "sha256": "8d4db2e148482b087b895d4cb6634503d924106ac157c7f32d24fb536c6228db"
+    },
+    {
+      "path": "tests/test_self_check.py",
+      "bytes": 8736,
+      "sha256": "75ced6e5d52838edb9e2857b7f22aea42b0ba810589e570c065f9272cd115b04"
     }
   ]
 }

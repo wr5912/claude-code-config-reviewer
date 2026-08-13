@@ -14,6 +14,7 @@ Do not execute a candidate command merely because its name contains “test”. 
 ## Determine whether the harness is representative
 
 A runtime/eval harness is useful only if it reflects the intended deployment configuration. Check:
+- same normalized Claude project root as the requested target;
 - same or intentionally equivalent `cwd`;
 - same `settingSources` / `setting_sources` semantics;
 - relevant project Skills/agents/settings/MCP loaded;

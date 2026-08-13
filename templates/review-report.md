@@ -2,14 +2,19 @@
 
 ## 1. Scope
 
-- Project root:
-- Runtime mode: CLI / Agent SDK / both / unknown
+- Host agent: Claude Code / Codex / other compatible host
+- Requested target:
+- Normalized Claude project root:
+- Target kind: project root / project `.claude` directory
+- Target Claude runtime mode: CLI / Agent SDK / both / unknown
 - Claude Code version:
 - SDK version/language:
 - Effective setting sources:
 - Review target scope:
 - Eval/runtime execution scope:
 - Excluded/non-target assets:
+
+Do not list Codex host configuration as Claude configuration. Record `.agents/` and `.codex/` as excluded host assets when present.
 
 ## 2. Executive summary
 

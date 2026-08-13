@@ -2,6 +2,8 @@
 
 This file is the normative source map for the Skill. **Only official Anthropic/Claude documentation may justify an `OFFICIAL-*` finding.** Community repositories and internal conventions are non-normative.
 
+Claude Code and Codex may both host this Skill. Host compatibility is documented separately in `host-compatibility.md`; OpenAI documentation can validate Codex installation or invocation behavior but must never justify an `OFFICIAL-*` finding about Claude configuration.
+
 Baseline rechecked: **2026-08-13**.
 
 ## Source hierarchy
