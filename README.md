@@ -1,24 +1,24 @@
-# Agent Config Reviewer
+# Agent Config Reviewer（Agent 配置审查器）
 
-A portable Claude Code project Skill for reviewing, validating, and optimizing the **effective configuration system** across project instructions, settings, permissions, rules, Skills, subagents, hooks, MCP, commands, output styles, worktrees, and Claude Agent SDK bootstrap code.
+一个可移植的 Claude Code 项目级 Skill，用于审查、验证和优化由项目指令、设置、权限、规则、Skills、子 Agent、hooks、MCP、命令、输出样式、worktrees 以及 Claude Agent SDK 启动代码共同构成的**实际生效配置系统**。
 
-## Install
+## 安装
 
-Project scope:
+项目级：
 
 ```text
 <project-root>/.claude/skills/agent-config-reviewer/
 ```
 
-User scope:
+用户级：
 
 ```text
 ~/.claude/skills/agent-config-reviewer/
 ```
 
-The Skill intentionally uses the name `agent-config-reviewer` rather than putting `claude` in the Skill name so the package follows Anthropic Agent Skills naming constraints while still reviewing Claude Code configuration.
+本 Skill 特意使用 `agent-config-reviewer` 这一名称，而没有在 Skill 名称中加入 `claude`。这样既能遵循 Anthropic Agent Skills 的命名约束，也能继续承担 Claude Code 配置审查职责。
 
-## Invocation examples
+## 调用示例
 
 ```text
 /agent-config-reviewer review
@@ -27,17 +27,17 @@ The Skill intentionally uses the name `agent-config-reviewer` rather than puttin
 /agent-config-reviewer validate the last configuration change
 ```
 
-The Skill does **not** require a particular repository layout. It starts from the current project/workspace and discovers documented Claude Code locations. It does not assume `workspace/`, `/data`, a particular tests directory, a particular runtime wrapper, or any named platform/product.
+本 Skill **不要求**仓库采用特定目录结构。它从当前项目或 workspace 出发，查找 Claude Code 文档中定义的位置；不会预设存在 `workspace/`、`/data`、某个特定测试目录、某个特定运行时封装，也不会预设使用任何指定的平台或产品。
 
-## Safety model
+## 安全模型
 
-Static review does not execute project hooks or arbitrary project code. Existing tests/evals are treated as validation assets rather than production-configuration targets. Runtime validation is allowed only after a safe non-production/mock/replay harness is identified or supplied by the user.
+静态审查不会执行项目 hooks 或任意项目代码。现有 tests/evals 会被视为验证资产，而不是生产配置的修改目标。只有在识别出安全的非生产、mock 或 replay 验证环境，或由用户提供此类环境后，才允许进行运行时验证。
 
-## Normative versus advisory findings
+## 规范性发现与建议性发现
 
-Only current official Anthropic/Claude documentation can support `OFFICIAL-*` findings. Security, portability, architecture, and maintainability guidance is clearly labeled separately. Community methods such as bounded edits, paired comparison, accepted/rejected remediation memory, and validation-gated optimization are used only as non-normative optimization techniques.
+只有当前有效的 Anthropic/Claude 官方文档可以作为 `OFFICIAL-*` 类发现的依据。安全性、可移植性、架构和可维护性方面的建议会单独明确标注。有限范围修改、配对比较、已接受/已拒绝修复记忆，以及以验证为门槛的优化等社区方法，仅作为非规范性的优化技术使用。
 
-## Package contents
+## 包含内容
 
 ```text
 agent-config-reviewer/
@@ -61,6 +61,6 @@ agent-config-reviewer/
     └── review-report.md
 ```
 
-## Bundled official baseline
+## 内置官方基线
 
-The bundled official-source baseline was rechecked on **2026-08-13**. Claude Code changes quickly. When network access is available, the reviewer should refresh version-sensitive claims from current official documentation before making a compliance verdict. When that cannot be done, version-sensitive findings must be marked `UNVERIFIED` rather than asserted as violations.
+内置的官方来源基线已于 **2026-08-13** 重新核查。Claude Code 的变化很快；在网络可用时，审查器应先根据当前官方文档刷新对版本敏感的结论，再作出合规判定。若无法刷新，则必须将对版本敏感的发现标记为 `UNVERIFIED`，而不能直接认定为违规。
