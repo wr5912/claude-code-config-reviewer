@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/tools/hooks/check shell.py\""},
+          {"type": "command", "command": "python3 \"${CLAUDE_PROJECT_DIR}/tools/hooks/check braces.py\""}
+        ]
+      }
+    ]
+  }
+}

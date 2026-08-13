@@ -68,9 +68,27 @@ $agent-config-reviewer optimize /path/to/claude-project
 $agent-config-reviewer validate /path/to/claude-project
 ```
 
-The input contract is `[review|optimize|validate] [target]`. The operation defaults to `review`; the target defaults to the current working directory only when no target was supplied.
+The input contract is `[review|optimize|validate] [target] [--runtime-root <path>]`. The operation defaults to `review`; the target defaults to the current working directory only when no target was supplied.
 
 `target` accepts a Claude project root or that project's direct `.claude` directory. `<project>/.claude` is normalized to `<project>` so sibling `CLAUDE.md`, `.mcp.json`, `.worktreeinclude`, and relevant Agent SDK bootstrap code stay in scope. Missing, unreadable, file, user-level `~/.claude`, and host configuration directory `.agents`/`.codex` targets fail explicitly and never fall back to the current directory.
+
+When Claude configuration and Agent SDK runtime code live in separate repositories, provide an explicit external runtime root:
+
+```text
+$agent-config-reviewer review /path/to/config-project --runtime-root /path/to/runtime-project
+```
+
+`--runtime-root` supplies SDK bootstrap, dependency, and runtime evidence only. It never changes the Claude configuration root or `${CLAUDE_PROJECT_DIR}`. An invalid explicit runtime path fails without fallback.
+
+## Verifiable review results
+
+A complete review records `PASS / FINDING / NA / UNVERIFIED` for every stable catalog check and dispositions every P0/P1 scanner candidate. The authoritative result is `agent-config-reviewer-report/v2` JSON; render Markdown only after validation:
+
+```bash
+python3 scripts/validate_review.py review.json --scan scan.json --markdown review.md
+```
+
+The first Markdown layer is the complete coverage index; the second expands P0/P1 details. A missing check, undispositioned P0/P1 candidate, or unsupported critical conclusion makes the report `INCOMPLETE` rather than silently passing.
 
 ## Safety model
 
@@ -81,9 +99,12 @@ Static review does not execute project hooks or arbitrary project code. Existing
 ```bash
 python3 -B scripts/self_check.py
 python3 -B -m unittest discover -s tests -v
+python3 -B scripts/run_evals.py
 ```
 
-The first command verifies the package manifest, file hashes, dual-host metadata, and target contract. The second covers explicit path normalization, host-configuration isolation, and target Claude runtime detection. Both use only the Python standard library.
+The first command verifies the package manifest, file hashes, dual-host metadata, catalog, and fixture contract. The second runs the compact table-driven regression suite. The third traverses eight synthetic multi-file fixtures. All use only the Python standard library, call no model, and never execute fixture hooks or project code.
+
+Real Claude Code/Codex Skill-on/Skill-off A/B is a manual pre-release gate rather than a daily test. See `references/eval-harness.md` for the fixed 12-run matrix, isolation procedure, ground truth, metric formulas, and `PASS / FAIL / INVALID` verdicts. The gate cannot access real workspaces, credentials, or production environments.
 
 ## Normative findings and host compatibility
 
@@ -99,6 +120,8 @@ agent-config-reviewer/
 ├── references/
 ├── scripts/
 │   ├── scan_project.py
+│   ├── validate_review.py
+│   ├── run_evals.py
 │   └── self_check.py
 ├── evals/
 ├── templates/

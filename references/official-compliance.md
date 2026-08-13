@@ -135,6 +135,17 @@ Current behavior:
 - Command hooks support `command` plus optional `args`.
 - When `args` is present, Claude Code spawns exec form without a shell.
 - Current docs say to set `args` whenever a hook references a path placeholder such as `${CLAUDE_PROJECT_DIR}`, unless shell behavior is intentionally required.
+- Exec form does no shell tokenization: `command` is one executable and every
+  `args` element is passed as one argument. Claude path placeholders are
+  substituted as plain strings, so paths containing spaces do not need shell
+  quoting.
+- Shell form runs through the selected/default shell, which performs variable
+  expansion and tokenization. Claude also exports `CLAUDE_PROJECT_DIR` to hook
+  processes, so POSIX `$CLAUDE_PROJECT_DIR` can be a shell variable reference;
+  it is not a Claude placeholder that should be substituted in exec form.
+- Relative shell paths are current-directory dependent because hook handlers
+  run in Claude Code's current directory. Prefer `${CLAUDE_PROJECT_DIR}` when a
+  project-root-stable path is intended.
 - Command hooks execute with the user's permissions and must be reviewed as executable code.
 
 Classification: shell form with path placeholders is usually an official recommendation issue unless it produces an actual semantic/security failure.

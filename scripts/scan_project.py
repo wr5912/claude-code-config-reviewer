@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""Portable static candidate scanner for Claude Code / Claude Agent SDK projects.
+"""Claude Code / Claude Agent SDK 项目的可移植静态候选扫描器。
 
-Design goals:
-- target defaults to current project/workspace;
-- no organization-specific paths or product names;
-- no execution of project hooks/tests/application code;
-- separate official semantics from security/portability heuristics;
-- tests/evals are not review targets by default, but candidate harnesses are discovered.
-
-The scanner is intentionally conservative. It is not the compliance authority; every
-OFFICIAL-* candidate must be checked against current official Claude documentation.
+设计目标：目标默认当前项目；不假设组织专属路径；不执行项目 Hook、测试或
+应用代码；区分官方语义与安全/可移植性启发式；默认只发现 tests/evals 作为
+验证资产而不把它们当生产配置。扫描器刻意保守，并非合规权威；每个
+``OFFICIAL-*`` candidate 都必须由当前 Claude 官方文档复核。
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import io
 import json
 import os
@@ -80,7 +76,21 @@ MCP_NAME = re.compile(r"\bmcp__[A-Za-z0-9._-]+__[A-Za-z0-9._*:-]+\b")
 SINGLE_SLASH_HOST_PATH = re.compile(r"\b(Read|Edit|Write|Glob|NotebookEdit|MultiEdit)\(/(?:etc|home|Users|var|tmp|opt|srv|data|mnt|root|c/)([^)]*)\)")
 PATH_QUALIFIED_IGNORED_TOOL = re.compile(r"\b(Write|Glob|NotebookEdit|MultiEdit)\([^)]*[/*~][^)]*\)")
 TASK_TOKEN = re.compile(r"\bTask(?:\(|\b)")
-HOOK_PLACEHOLDER = re.compile(r"\$\{CLAUDE_(?:PROJECT_DIR|PLUGIN_ROOT|PLUGIN_DATA)\}")
+HOOK_PROJECT_REFERENCE = re.compile(
+    r"\$\{CLAUDE_PROJECT_DIR\}|\$env:CLAUDE_PROJECT_DIR\b|\$CLAUDE_PROJECT_DIR\b",
+    re.I,
+)
+HOOK_DYNAMIC_REFERENCE = re.compile(
+    r"`[^`]*`|\$\([^)]*\)|\$\{[^}]+\}|\$(?:env:)?[A-Za-z_][A-Za-z0-9_]*",
+    re.I,
+)
+HOOK_SCRIPT_EXTENSIONS = {".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".ps1"}
+HOOK_CONTROL_EVENTS = {"PreToolUse", "PermissionRequest"}
+SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)((?:[\"']?)(?:authorization|x-api-key|api[-_]?key|access[-_]?token|token|secret|password|credential)"
+    r"(?:[\"']?)\s*[=:]\s*)"
+    r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s,}\]]+)"
+)
 BROAD_MCP_ALLOW = re.compile(r"^mcp__[A-Za-z0-9._-]+__(?:\*|.+\*)$")
 BROAD_SHELL_ALLOW = re.compile(r"^(?:Bash|PowerShell)\((?:bash|sh|python|python3|node|perl|ruby|env|printenv|cat|find|jq) \*\)$")
 CLAUDE_CLI_INVOCATION = re.compile(r"(?<![\w.-])claude\s+(?:-p|--print|--agent|--worktree)\b")
@@ -89,6 +99,10 @@ CLAUDE_CLI_OPTIONS = {"-p", "--print", "--agent", "--worktree"}
 
 class TargetValidationError(ValueError):
     """当 --target 无法定位可读的 Claude 项目时抛出。"""
+
+
+class RuntimeRootValidationError(ValueError):
+    """当 --runtime-root 无法定位可读的运行时代码目录时抛出。"""
 
 
 @dataclass(frozen=True)
@@ -192,11 +206,31 @@ def normalize_target(requested_target: str) -> TargetSelection:
     )
 
 
+def normalize_runtime_root(requested_runtime_root: str | None, target_root: Path) -> Path:
+    """解析显式运行时根；无效输入必须失败，绝不回退到 cwd。"""
+    if requested_runtime_root is None:
+        return target_root.resolve()
+    if not requested_runtime_root.strip():
+        raise RuntimeRootValidationError("Runtime root must not be empty")
+    try:
+        resolved = Path(requested_runtime_root).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise RuntimeRootValidationError(
+            f"Runtime root does not exist or cannot be resolved: {requested_runtime_root} ({exc})"
+        ) from exc
+    if not resolved.is_dir():
+        raise RuntimeRootValidationError(f"Runtime root must be a directory: {requested_runtime_root}")
+    if not os.access(resolved, os.R_OK | os.X_OK):
+        raise RuntimeRootValidationError(f"Runtime root is not readable: {requested_runtime_root}")
+    return resolved
+
+
 @dataclass
 class Evidence:
     path: str
     line: int
     text: str
+    scope: str = "target"
 
 
 @dataclass
@@ -209,13 +243,36 @@ class Finding:
     evidence: list[Evidence]
     official_source: str | None = None
     confidence: str = "candidate"
+    candidate_id: str = ""
+    rule_id: str = ""
+    root_cause_hint: str = ""
+
+
+@dataclass
+class HookReference:
+    reference_id: str
+    event: str
+    matcher: str
+    form: str
+    status: str
+    settings_path: str
+    line: int
+    json_pointer: str
+    token: str
+    resolved_path: str | None
+    scope: str | None
+    message: str
+    candidate_id: str | None = None
 
 
 class ReviewScanner:
     def __init__(self, root: Path, runtime: str, include_eval_targets: bool = False,
                  requested_target: str | None = None, target_kind: str = "project-root",
-                 claude_dir: Path | None = None):
+                 claude_dir: Path | None = None, runtime_root: Path | None = None,
+                 requested_runtime_root: str | None = None):
         self.root = root.resolve()
+        self.runtime_root = (runtime_root or self.root).resolve()
+        self.runtime_root_explicit = runtime_root is not None
         project_claude = self.root / ".claude"
         self.claude_dir = None
         if project_claude.is_symlink():
@@ -228,11 +285,18 @@ class ReviewScanner:
         elif claude_dir is not None and claude_dir.resolve() != project_claude.resolve(strict=False):
             self.claude_dir = claude_dir.resolve()
         self.requested_target = requested_target if requested_target is not None else str(root)
+        self.requested_runtime_root = (
+            requested_runtime_root
+            if requested_runtime_root is not None
+            else (str(runtime_root) if runtime_root is not None else str(self.root))
+        )
         self.target_kind = target_kind
         self.runtime_requested = runtime
         self.include_eval_targets = include_eval_targets
         self.files: list[Path] = []
+        self.runtime_files: list[Path] = []
         self.logical_paths: dict[Path, str] = {}
+        self.runtime_logical_paths: dict[Path, str] = {}
         self.text: dict[Path, str] = {}
         self.findings: list[Finding] = []
         self.settings: list[tuple[Path, dict[str, Any]]] = []
@@ -242,16 +306,63 @@ class ReviewScanner:
         self.runtime_evidence: list[Evidence] = []
         self.sdk_files: list[Path] = []
         self.eval_assets: list[str] = []
+        self.hook_references: list[HookReference] = []
+        self.scanned_hook_scripts: set[Path] = set()
+        self._candidate_fingerprint_counts: dict[str, int] = {}
         # 静态 helper 不执行 PATH 中的任何二进制；宿主可在受信环境中另行记录版本。
         self.claude_version: str | None = None
 
     def rel(self, p: Path) -> str:
+        """返回配置审查面的逻辑路径，外部 runtime 文件使用其独立相对路径。"""
         if p in self.logical_paths:
             return self.logical_paths[p]
         try:
             return p.resolve().relative_to(self.root).as_posix()
         except Exception:
-            return p.as_posix()
+            pass
+        return self.runtime_rel(p)
+
+    def runtime_rel(self, p: Path) -> str:
+        """返回 runtime root 内的相对路径，不与 target root 的层级混用。"""
+        if p in self.runtime_logical_paths:
+            return self.runtime_logical_paths[p]
+        try:
+            return p.resolve().relative_to(self.runtime_root).as_posix()
+        except Exception:
+            return "<outside-authorized-roots>"
+
+    @staticmethod
+    def redact_sensitive_text(text: str) -> str:
+        """在证据序列化前遮蔽常见凭据值，同时保留键名和定位上下文。"""
+        redacted = SENSITIVE_ASSIGNMENT.sub(lambda m: f"{m.group(1)}[REDACTED]", text)
+        redacted = re.sub(
+            r"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+",
+            r"\1 [REDACTED]",
+            redacted,
+        )
+        return redacted
+
+    def evidence_scope(self, p: Path) -> str:
+        """按授权根标记证据来源；链接的 .claude 始终属于 target。"""
+        resolved = p.resolve(strict=False)
+        if self.claude_dir is not None:
+            try:
+                resolved.relative_to(self.claude_dir)
+                return "target"
+            except ValueError:
+                pass
+        try:
+            resolved.relative_to(self.root)
+            return "target"
+        except ValueError:
+            pass
+        if self.runtime_root != self.root:
+            try:
+                resolved.relative_to(self.runtime_root)
+                return "runtime"
+            except ValueError:
+                pass
+        return "target"
 
     def read(self, p: Path) -> str:
         if p not in self.text:
@@ -261,16 +372,32 @@ class ReviewScanner:
                 self.text[p] = ""
         return self.text[p]
 
-    def ev(self, p: Path, line: int, text: str | None = None) -> Evidence:
+    def ev(self, p: Path, line: int, text: str | None = None, scope: str | None = None) -> Evidence:
         if text is None:
             lines = self.read(p).splitlines()
             text = lines[line - 1] if 1 <= line <= len(lines) else ""
-        return Evidence(self.rel(p), line, text.strip()[:320])
+        actual_scope = scope or self.evidence_scope(p)
+        return Evidence(
+            self.runtime_rel(p) if actual_scope == "runtime" else self.rel(p),
+            line,
+            self.redact_sensitive_text(text.strip())[:320],
+            actual_scope,
+        )
 
     def find_line(self, p: Path, needle: str) -> Evidence:
         for i, line in enumerate(self.read(p).splitlines(), 1):
             if needle in line:
                 return self.ev(p, i, line)
+        return self.ev(p, 1)
+
+    def find_line_by_needles(self, p: Path, needles: Iterable[str]) -> Evidence:
+        """按稳定的配置片段定位一行，避免整条 command 因转义差异落到首行。"""
+        lines = self.read(p).splitlines()
+        usable = [needle for needle in needles if needle]
+        for needle in usable:
+            for line_number, line in enumerate(lines, 1):
+                if needle in line:
+                    return self.ev(p, line_number, line)
         return self.ev(p, 1)
 
     def regex_evidence(self, p: Path, rx: re.Pattern[str], limit: int = 12) -> list[Evidence]:
@@ -284,8 +411,39 @@ class ReviewScanner:
 
     def add(self, fid: str, severity: str, cls: str, title: str, message: str,
             evidence: Iterable[Evidence] = (), official_source: str | None = None,
-            confidence: str = "candidate") -> None:
-        self.findings.append(Finding(fid, severity, cls, title, message, list(evidence), official_source, confidence))
+            confidence: str = "candidate", root_cause_hint: str | None = None) -> Finding:
+        safe_evidence = [
+            Evidence(item.path, item.line, self.redact_sensitive_text(item.text), item.scope)
+            for item in evidence
+        ]
+        fingerprint_source = json.dumps(
+            {
+                "rule_id": fid,
+                "title": title,
+                "evidence": [(item.scope, item.path, item.line) for item in safe_evidence],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+        fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()[:16]
+        occurrence = self._candidate_fingerprint_counts.get(fingerprint, 0) + 1
+        self._candidate_fingerprint_counts[fingerprint] = occurrence
+        candidate_id = f"C-{fingerprint}" if occurrence == 1 else f"C-{fingerprint}-{occurrence}"
+        finding = Finding(
+            fid,
+            severity,
+            cls,
+            title,
+            self.redact_sensitive_text(message),
+            safe_evidence,
+            official_source,
+            confidence,
+            candidate_id,
+            fid,
+            root_cause_hint or fid.lower(),
+        )
+        self.findings.append(finding)
+        return finding
 
     @staticmethod
     def is_eval_file(p: Path) -> bool:
@@ -367,8 +525,8 @@ class ReviewScanner:
                 ):
                     continue
                 keep_dirs.append(d)
-            dirs[:] = keep_dirs
-            for name in names:
+            dirs[:] = sorted(keep_dirs)
+            for name in sorted(names):
                 p = b / name
                 if name in {"AGENTS.md", "AGENTS.override.md"}:
                     continue
@@ -412,9 +570,46 @@ class ReviewScanner:
                     self.files.append(p)
 
     def collect_files(self) -> None:
+        self.files = []
+        self.runtime_files = []
+        self.logical_paths = {}
+        self.runtime_logical_paths = {}
         self.collect_tree(self.root)
         if self.claude_dir is not None:
             self.collect_tree(self.claude_dir, ".claude")
+        self.collect_runtime_files()
+
+    def collect_runtime_files(self) -> None:
+        """单独建立运行时文件集，避免外部 runtime root 污染配置扫描面。"""
+        if self.runtime_root == self.root:
+            self.runtime_files = list(self.files)
+            return
+        for base, dirs, names in os.walk(self.runtime_root, followlinks=False):
+            directory = Path(base)
+            dirs[:] = sorted([
+                name
+                for name in dirs
+                if name not in BUILD_DIRS
+                and name not in HOST_CONFIG_DIRS
+                and name != ".claude"
+                and not (directory / name).is_symlink()
+                and (self.include_eval_targets or name.lower() not in EVAL_DIR_NAMES)
+            ])
+            for name in sorted(names):
+                path = directory / name
+                if path.is_symlink() or (
+                    not self.include_eval_targets and self.is_eval_file(path)
+                ):
+                    continue
+                try:
+                    if path.stat().st_size > 5 * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                relative = path.relative_to(self.runtime_root).as_posix()
+                self.runtime_logical_paths[path] = relative
+                if self.is_runtime_candidate(path):
+                    self.runtime_files.append(path)
 
     def classify(self, p: Path) -> str:
         r = self.rel(p)
@@ -1186,7 +1381,7 @@ class ReviewScanner:
         sdk_hits: list[Evidence] = []
         cli_hits: list[Evidence] = []
         self.sdk_files = []
-        for p in self.files:
+        for p in self.runtime_files:
             if not self.is_runtime_candidate(p):
                 continue
             file_sdk_hits = self.sdk_evidence(p)
@@ -1206,7 +1401,10 @@ class ReviewScanner:
             self.runtime_mode = "cli"
         else:
             self.runtime_mode = "unknown"
-        self.runtime_evidence = sdk_hits[:8] + cli_hits[:4]
+        self.runtime_evidence = [
+            Evidence(item.path, item.line, item.text, "runtime")
+            for item in (sdk_hits[:8] + cli_hits[:4])
+        ]
 
     def discover_eval_assets(self) -> None:
         candidates: list[str] = []
@@ -1399,67 +1597,363 @@ class ReviewScanner:
             if not isinstance(groups, list):
                 continue
             matchers = []
-            for group in groups:
+            event_pointer = f"/hooks/{self.json_pointer_segment(str(event))}"
+            for group_index, group in enumerate(groups):
                 if not isinstance(group, dict):
                     continue
-                matchers.append(str(group.get("matcher", "")))
+                matcher = str(group.get("matcher", ""))
+                matchers.append(matcher)
                 handlers = group.get("hooks")
                 if not isinstance(handlers, list):
                     continue
-                for h in handlers:
+                for handler_index, h in enumerate(handlers):
                     if not isinstance(h, dict) or h.get("type") != "command":
                         continue
-                    cmd = str(h.get("command", ""))
+                    pointer = f"{event_pointer}/{group_index}/hooks/{handler_index}"
+                    raw_command = h.get("command", "")
+                    cmd = raw_command if isinstance(raw_command, str) else ""
                     args = h.get("args")
-                    if HOOK_PLACEHOLDER.search(cmd) and args is None:
+                    if "${CLAUDE_PROJECT_DIR}" in cmd and args is None:
                         self.add("A-HOOK-EXECFORM", "P3", "OPTIMIZATION", "Hook path placeholder uses shell form",
                                  "Current official hook docs recommend setting `args` when path placeholders are referenced so exec form avoids shell quoting/tokenization issues, unless shell behavior is intentional.",
                                  [self.find_line(p, cmd[:50])], OFFICIAL["hooks"])
-                    self.scan_referenced_hook_script(p, cmd, args)
+                    self.scan_referenced_hook_script(
+                        p,
+                        str(event),
+                        matcher,
+                        cmd,
+                        args,
+                        pointer,
+                    )
             if event == "PreToolUse" and len(matchers) > 1 and any(m in {"", ".*", "*"} for m in matchers):
                 self.add("R-HOOK-OVERLAP", "P2", "MAINTAINABILITY-RISK", "Catch-all and narrower PreToolUse hooks coexist",
                          "Multiple matching hooks can participate in the same event. Ensure security decisions do not rely on a human-assumed serial order and that handlers are independent/idempotent.",
                          [self.find_line(p, '"PreToolUse"')], OFFICIAL["hooks"])
 
-    def scan_referenced_hook_script(self, settings_path: Path, cmd: str, args: Any) -> None:
-        tokens: list[str] = []
-        expanded_command = cmd.replace("${CLAUDE_PROJECT_DIR}", str(self.root))
+    @staticmethod
+    def json_pointer_segment(value: str) -> str:
+        return value.replace("~", "~0").replace("/", "~1")
+
+    def authorized_hook_roots(self) -> list[tuple[str, Path]]:
+        roots: list[tuple[str, Path]] = []
+        if self.claude_dir is not None:
+            roots.append(("target", self.claude_dir))
+        roots.append(("target", self.root))
+        if self.runtime_root != self.root:
+            roots.append(("runtime", self.runtime_root))
+        return roots
+
+    @staticmethod
+    def path_within(path: Path, root: Path) -> bool:
         try:
-            tokens.extend(shlex.split(expanded_command, posix=True))
+            path.relative_to(root)
+            return True
         except ValueError:
+            return False
+
+    def display_hook_token(self, token: str) -> str:
+        value = self.redact_sensitive_text(token.strip())
+        display_roots = []
+        display_roots.append(("${CLAUDE_PROJECT_DIR}", self.root))
+        if self.runtime_root != self.root:
+            display_roots.append(("${RUNTIME_ROOT}", self.runtime_root))
+        for marker, root in display_roots:
+            root_text = str(root)
+            if value == root_text or value.startswith(root_text + os.sep):
+                value = marker + value[len(root_text):]
+                break
+        try:
+            candidate = Path(value).expanduser()
+            if candidate.is_absolute() and not any(
+                self.path_within(candidate.resolve(strict=False), allowed)
+                for _scope, allowed in self.authorized_hook_roots()
+            ):
+                return "<absolute-path-outside-authorized-roots>"
+        except (OSError, RuntimeError, ValueError):
             pass
-        if isinstance(args, list):
-            tokens.extend(str(x) for x in args)
-        for token in tokens:
-            # Resolve only project-root placeholders and obvious relative paths; never execute.
-            normalized = token.replace("${CLAUDE_PROJECT_DIR}", str(self.root)).strip().strip('"\'')
-            candidates: list[Path] = []
-            raw_candidate = Path(normalized)
-            if raw_candidate.is_absolute():
-                candidates.append(raw_candidate)
-            elif normalized.startswith("./"):
-                candidates.append(self.root / normalized[2:])
-            for c in candidates:
-                try:
-                    resolved = c.resolve(strict=True)
-                except (OSError, RuntimeError, ValueError):
-                    continue
-                authorized = False
-                for allowed_root in [self.root, *([self.claude_dir] if self.claude_dir is not None else [])]:
-                    try:
-                        resolved.relative_to(allowed_root)
-                        authorized = True
-                        break
-                    except ValueError:
-                        continue
-                if authorized and resolved.is_file() and resolved.suffix in {".py", ".sh", ".js", ".mjs", ".cjs", ".ts", ".ps1"}:
-                    if self.claude_dir is not None:
-                        try:
-                            logical = Path(".claude") / resolved.relative_to(self.claude_dir)
-                            self.logical_paths[resolved] = logical.as_posix()
-                        except ValueError:
-                            pass
-                    self.scan_hook_script(resolved)
+        return value[:320]
+
+    def record_hook_reference(
+        self,
+        settings_path: Path,
+        event: str,
+        matcher: str,
+        form: str,
+        status: str,
+        json_pointer: str,
+        token: str,
+        resolved_path: str | None,
+        scope: str | None,
+        message: str,
+    ) -> None:
+        display_token = self.display_hook_token(token)
+        token_tail = token.replace("\\", "/").rsplit("/", 1)[-1].strip('"\'')
+        evidence = self.find_line_by_needles(
+            settings_path,
+            (token[:80], token_tail[:80], '"command"'),
+        )
+        evidence.scope = "target"
+        identity = json.dumps(
+            {
+                "settings": self.rel(settings_path),
+                "pointer": json_pointer,
+                "token": display_token,
+                "status": status,
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        )
+        reference_id = "HR-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        candidate_id: str | None = None
+        if status != "RESOLVED":
+            finding = self.add(
+                "A-HOOK-REFERENCE",
+                "P1" if event in HOOK_CONTROL_EVENTS else "P2",
+                "UNVERIFIED",
+                "Hook reference could not be resolved deterministically",
+                f"{status}: {message} Review {json_pointer}; the referenced Hook source was not scanned.",
+                [evidence],
+                OFFICIAL["hooks"],
+                root_cause_hint="hook-reference-resolution",
+            )
+            candidate_id = finding.candidate_id
+        self.hook_references.append(
+            HookReference(
+                reference_id,
+                event,
+                matcher,
+                form,
+                status,
+                self.rel(settings_path),
+                evidence.line,
+                json_pointer,
+                display_token,
+                resolved_path,
+                scope,
+                message,
+                candidate_id,
+            )
+        )
+
+    @staticmethod
+    def looks_like_hook_path(token: str, command_atom: bool = False) -> bool:
+        stripped = token.strip().strip('"\'')
+        if not stripped:
+            return False
+        if HOOK_PROJECT_REFERENCE.search(stripped) or HOOK_DYNAMIC_REFERENCE.search(stripped):
+            return command_atom or "/" in stripped or "\\" in stripped
+        return (
+            Path(stripped).suffix.lower() in HOOK_SCRIPT_EXTENSIONS
+            or (command_atom and (stripped.startswith("./") or stripped.startswith("../")))
+        )
+
+    def resolve_hook_reference(
+        self,
+        token: str,
+        form: str,
+        project_reference_quoted: bool = False,
+    ) -> tuple[str, Path | None, str | None, str]:
+        stripped = token.strip().strip('"\'')
+        if form == "exec" and re.search(
+            r"\$CLAUDE_PROJECT_DIR\b|\$env:CLAUDE_PROJECT_DIR\b",
+            stripped,
+            re.I,
+        ):
+            return "DYNAMIC", None, None, "bare environment variables are not expanded in exec form"
+
+        if (
+            form == "shell"
+            and HOOK_PROJECT_REFERENCE.search(stripped)
+            and not project_reference_quoted
+            and any(character.isspace() for character in str(self.root))
+        ):
+            return (
+                "MALFORMED",
+                None,
+                "target",
+                "an unquoted project-directory environment variable can be split when the project path contains spaces",
+            )
+
+        expanded = stripped.replace("${CLAUDE_PROJECT_DIR}", str(self.root))
+        if form == "shell":
+            expanded = re.sub(r"\$env:CLAUDE_PROJECT_DIR\b", lambda _m: str(self.root), expanded, flags=re.I)
+            expanded = re.sub(r"\$CLAUDE_PROJECT_DIR\b", lambda _m: str(self.root), expanded)
+        if HOOK_DYNAMIC_REFERENCE.search(expanded):
+            return "DYNAMIC", None, None, "the path still depends on runtime shell or environment expansion"
+
+        try:
+            raw_path = Path(expanded).expanduser()
+            candidate = raw_path if raw_path.is_absolute() else self.root / raw_path
+            lexical_resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return "MALFORMED", None, None, f"the path cannot be normalized ({exc})"
+
+        authorized = [
+            (scope, root)
+            for scope, root in self.authorized_hook_roots()
+            if self.path_within(lexical_resolved, root)
+        ]
+        if not authorized:
+            return "OUTSIDE_ROOT", None, None, "the resolved path is outside target and explicit runtime roots"
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return "MISSING", None, authorized[0][0], "the referenced path does not exist"
+        authorized = [
+            (scope, root)
+            for scope, root in self.authorized_hook_roots()
+            if self.path_within(resolved, root)
+        ]
+        if not authorized:
+            return "OUTSIDE_ROOT", None, None, "a symlink resolves outside target and explicit runtime roots"
+        if not resolved.is_file():
+            return "MALFORMED", None, authorized[0][0], "the referenced path is not a regular file"
+        if not os.access(resolved, os.R_OK):
+            return "READ_FAILED", None, authorized[0][0], "the referenced file is not readable"
+        scope = authorized[0][0]
+        if self.claude_dir is not None and self.path_within(resolved, self.claude_dir):
+            logical = Path(".claude") / resolved.relative_to(self.claude_dir)
+            self.logical_paths[resolved] = logical.as_posix()
+            scope = "target"
+        elif scope == "runtime" and self.runtime_root != self.root:
+            self.runtime_logical_paths[resolved] = resolved.relative_to(self.runtime_root).as_posix()
+        return "RESOLVED", resolved, scope, "the referenced file is readable within an authorized root"
+
+    @staticmethod
+    def shell_token_quote_flags(command: str) -> list[bool]:
+        """返回每个 shell token 是否把项目目录引用置于引号内。"""
+        flags: list[bool] = []
+        quote: str | None = None
+        escaped = False
+        token_active = False
+        token_has_reference = False
+        token_has_quoted_reference = False
+        index = 0
+        while index < len(command):
+            character = command[index]
+            if escaped:
+                token_active = True
+                escaped = False
+                index += 1
+                continue
+            if character == "\\" and quote != "'":
+                token_active = True
+                escaped = True
+                index += 1
+                continue
+            if character in {"'", '"'}:
+                token_active = True
+                if quote == character:
+                    quote = None
+                elif quote is None:
+                    quote = character
+                index += 1
+                continue
+            if character.isspace() and quote is None:
+                if token_active:
+                    flags.append(not token_has_reference or token_has_quoted_reference)
+                token_active = False
+                token_has_reference = False
+                token_has_quoted_reference = False
+                index += 1
+                continue
+            token_active = True
+            match = HOOK_PROJECT_REFERENCE.match(command, index)
+            if match:
+                token_has_reference = True
+                if quote is not None:
+                    token_has_quoted_reference = True
+                index = match.end()
+                continue
+            index += 1
+        if token_active:
+            flags.append(not token_has_reference or token_has_quoted_reference)
+        return flags
+
+    def scan_referenced_hook_script(
+        self,
+        settings_path: Path,
+        event: str,
+        matcher: str,
+        cmd: str,
+        args: Any,
+        pointer: str,
+    ) -> None:
+        form = "exec" if args is not None else "shell"
+        atoms: list[tuple[str, str, bool, bool]] = []
+        if not cmd.strip():
+            self.record_hook_reference(
+                settings_path, event, matcher, form, "MALFORMED",
+                pointer + "/command", "", None, None, "command must be a non-empty string",
+            )
+            return
+        if form == "shell":
+            try:
+                shell_tokens = shlex.split(cmd, posix=True)
+            except ValueError as exc:
+                self.record_hook_reference(
+                    settings_path, event, matcher, form, "MALFORMED",
+                    pointer + "/command", cmd, None, None, f"shell tokenization failed ({exc})",
+                )
+                return
+            quote_flags = self.shell_token_quote_flags(cmd)
+            if len(quote_flags) != len(shell_tokens):
+                quote_flags = [False] * len(shell_tokens)
+            atoms.extend(
+                (token, pointer + "/command", index == 0, quote_flags[index])
+                for index, token in enumerate(shell_tokens)
+            )
+        else:
+            if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+                self.record_hook_reference(
+                    settings_path, event, matcher, form, "MALFORMED",
+                    pointer + "/args", "", None, None, "exec-form args must be an array of strings",
+                )
+                return
+            atoms.append((cmd, pointer + "/command", True, True))
+            atoms.extend(
+                (item, f"{pointer}/args/{index}", False, True)
+                for index, item in enumerate(args)
+            )
+
+        for token, json_pointer, command_atom, project_reference_quoted in atoms:
+            if not self.looks_like_hook_path(token, command_atom):
+                if form == "exec" and command_atom and any(character.isspace() for character in token):
+                    self.record_hook_reference(
+                        settings_path, event, matcher, form, "MALFORMED", json_pointer,
+                        token, None, None, "exec-form command is one executable atom, not a shell command line",
+                    )
+                continue
+            status, resolved, scope, message = self.resolve_hook_reference(
+                token,
+                form,
+                project_reference_quoted,
+            )
+            resolved_path = (
+                self.runtime_rel(resolved)
+                if resolved is not None and scope == "runtime"
+                else (self.rel(resolved) if resolved is not None else None)
+            )
+            self.record_hook_reference(
+                settings_path,
+                event,
+                matcher,
+                form,
+                status,
+                json_pointer,
+                token,
+                resolved_path,
+                scope,
+                message,
+            )
+            if (
+                status == "RESOLVED"
+                and resolved is not None
+                and resolved.suffix.lower() in HOOK_SCRIPT_EXTENSIONS
+                and resolved not in self.scanned_hook_scripts
+            ):
+                self.scanned_hook_scripts.add(resolved)
+                self.scan_hook_script(resolved)
 
     def scan_hook_script(self, p: Path) -> None:
         txt = self.read(p)
@@ -1481,14 +1975,6 @@ class ReviewScanner:
                              "Broad exception handling near an apparent success/allow return needs manual control-flow validation. Critical guard errors should normally block rather than silently allow.",
                              [self.ev(p, i, line)])
                     break
-        if "argument_resolution_status" in txt and re.search(r"!=\s*[\"']ready[\"'][\s\S]{0,300}?return\s+True", txt):
-            self.add("R-HOOK-UNRESOLVED", "P1", "SECURITY-RISK", "Frozen-argument guard may allow unresolved state",
-                     "In a frozen-plan security model, unresolved/unknown argument state usually needs explicit fail-closed handling. Confirm project intent and add a regression case.",
-                     [self.find_line(p, "argument_resolution_status")])
-        if re.search(r"get_trace\|cleanup|\(get_trace\|cleanup\)", txt):
-            self.add("R-HOOK-TRACE-CLEAN", "P1", "SECURITY-RISK", "Diagnostic trace-read and cleanup share a gate",
-                     "Read-only diagnostics and runtime-owned cleanup usually have different authorization/lifecycle semantics. Review them separately.",
-                     self.regex_evidence(p, re.compile(r"get_trace.*cleanup|cleanup.*get_trace"), 4))
 
     def scan_sdk_semantics(self) -> None:
         if self.runtime_mode not in {"agent-sdk", "both"}:
@@ -1500,15 +1986,15 @@ class ReviewScanner:
             txt = self.read(p)
             for i, line in enumerate(txt.splitlines(), 1):
                 if re.search(r"setting_sources\s*=|settingSources\s*:", line):
-                    explicit_sources.append(self.ev(p, i, line))
+                    explicit_sources.append(self.ev(p, i, line, "runtime"))
                 if re.search(r"allowed_tools\s*=|allowedTools\s*:", line):
                     # File-level heuristic: no dontAsk near same config block.
                     chunk = txt[max(0, txt.find(line)-1000): txt.find(line)+2000]
                     if "dontAsk" not in chunk and "can_use_tool" not in chunk and "canUseTool" not in chunk:
-                        allowed_without_lockdown.append(self.ev(p, i, line))
+                        allowed_without_lockdown.append(self.ev(p, i, line, "runtime"))
                 if "bypassPermissions" in line:
                     if re.search(r"allowed_tools|allowedTools", txt):
-                        bypass_combo.append(self.ev(p, i, line))
+                        bypass_combo.append(self.ev(p, i, line, "runtime"))
         if allowed_without_lockdown:
             self.add("O-SDK-ALLOWLIST", "P1", "OFFICIAL-SEMANTIC-ERROR", "SDK allowedTools may be treated as a restrictive allowlist without a denying permission mode/callback",
                      "Official SDK docs state allowedTools adds pre-approval; unlisted tools fall through to the permission mode/callback. Validate the effective permission flow.",
@@ -1521,7 +2007,7 @@ class ReviewScanner:
         project_config_exists = any((self.root / x).exists() for x in ["CLAUDE.md", ".claude/settings.json", ".mcp.json", ".claude/skills"])
         if project_config_exists and explicit_sources:
             self.add("A-SDK-SOURCES", "P2", "UNVERIFIED", "Agent SDK explicitly sets filesystem setting sources",
-                     "Explicit settingSources/setting_sources changes which project/user/local configuration loads. Verify that `project` is present wherever project CLAUDE.md/settings/Skills/.mcp.json are expected. Static text alone may not resolve dynamically constructed options.",
+                     "Explicit settingSources/setting_sources changes which project/user/local configuration loads. Verify that `project` is present wherever project CLAUDE.md/settings/Skills are expected and that MCP loading matches the installed SDK version. Static text alone may not resolve dynamically constructed options.",
                      explicit_sources[:8], OFFICIAL["sdk_features"])
 
     def cross_file_checks(self) -> None:
@@ -1552,6 +2038,17 @@ class ReviewScanner:
                      [self.ev(commands[name], 1), self.ev(skills[name], 1)], OFFICIAL["skills"], "confirmed")
 
     def run(self) -> dict[str, Any]:
+        self.text = {}
+        self.findings = []
+        self.settings = []
+        self.project_deny_rules = set()
+        self.agent_tools = {}
+        self.runtime_evidence = []
+        self.sdk_files = []
+        self.eval_assets = []
+        self.hook_references = []
+        self.scanned_hook_scripts = set()
+        self._candidate_fingerprint_counts = {}
         self.collect_files()
         self.detect_runtime()
         self.discover_eval_assets()
@@ -1579,15 +2076,25 @@ class ReviewScanner:
         self.cross_file_checks()
         order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
         self.findings.sort(key=lambda f: (order.get(f.severity, 9), f.cls, f.id, f.evidence[0].path if f.evidence else ""))
+        serialized_findings = [asdict(item) for item in self.findings]
         return {
+            "schema_version": "agent-config-reviewer-scan/v2",
             "requested_target": self.requested_target,
             "target": str(self.root),
             "target_kind": self.target_kind,
+            "requested_runtime_root": self.requested_runtime_root,
+            "runtime_root": str(self.runtime_root),
+            "runtime_root_explicit": self.runtime_root_explicit,
             "runtime": self.runtime_mode,
             "claude_version": self.claude_version,
             "runtime_evidence": [asdict(x) for x in self.runtime_evidence],
+            "target_files": sorted({self.rel(path) for path in self.files}),
+            "runtime_files": sorted({self.runtime_rel(path) for path in self.runtime_files}),
             "eval_assets": self.eval_assets,
-            "findings": [asdict(x) for x in self.findings],
+            "hook_references": [asdict(item) for item in self.hook_references],
+            "candidates": serialized_findings,
+            # 兼容 v1 消费方；scan/v2 以 candidates 为权威字段。
+            "findings": serialized_findings,
         }
 
 
@@ -1625,6 +2132,8 @@ def markdown(result: dict[str, Any]) -> str:
         f"- Requested target: {inline_code(result['requested_target'])}",
         f"- Normalized target: {inline_code(result['target'])}",
         f"- Target kind: `{result['target_kind']}`",
+        f"- Requested runtime root: {inline_code(result.get('requested_runtime_root', result['requested_target']))}",
+        f"- Normalized runtime root: {inline_code(result.get('runtime_root', result['target']))}",
         f"- Target Claude runtime: `{result['runtime']}`",
         f"- Claude version: `{result['claude_version'] or 'unknown'}`",
         f"- Findings: " + ", ".join(f"{k}={counts.get(k, 0)}" for k in ["P0", "P1", "P2", "P3"]),
@@ -1663,6 +2172,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Claude project/workspace root or its project-level .claude directory; defaults to current directory",
     )
     ap.add_argument("--runtime", choices=["auto", "cli", "agent-sdk", "both", "unknown"], default="auto")
+    ap.add_argument(
+        "--runtime-root",
+        help="Optional runtime/bootstrap source root; defaults to the normalized Claude project root",
+    )
     ap.add_argument("--include-eval-targets", action="store_true", help="Include test/eval directories in review targets (off by default)")
     ap.add_argument("--format", choices=["markdown", "json"], default="markdown")
     ap.add_argument("--output", help="Optional output file")
@@ -1670,7 +2183,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         target = normalize_target(args.target)
-    except TargetValidationError as exc:
+        runtime_root = normalize_runtime_root(args.runtime_root, target.root)
+    except (TargetValidationError, RuntimeRootValidationError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     result = ReviewScanner(
@@ -1680,6 +2194,8 @@ def main(argv: list[str] | None = None) -> int:
         requested_target=target.requested_target,
         target_kind=target.target_kind,
         claude_dir=target.claude_dir,
+        runtime_root=runtime_root if args.runtime_root is not None else None,
+        requested_runtime_root=args.runtime_root,
     ).run()
     content = json.dumps(result, ensure_ascii=False, indent=2) if args.format == "json" else markdown(result)
     if args.output:

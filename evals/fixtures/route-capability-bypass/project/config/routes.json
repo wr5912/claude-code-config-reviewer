@@ -1,0 +1,6 @@
+{
+  "routes": [
+    {"from": "draft", "event": "approve", "to": "approved", "capability": "none"},
+    {"from": "draft", "event": "deploy_without_approval", "to": "deployed", "capability": "deploy"}
+  ]
+}

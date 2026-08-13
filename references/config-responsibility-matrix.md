@@ -15,6 +15,8 @@ Use this matrix to prevent role duplication and misplaced controls. “Best home
 | User-invoked legacy shortcut | `.claude/commands/` only when intentionally retained | Duplicated full workflow implementation |
 | Provider-specific physical tool binding | Runtime/integration adapter/registry | Repeating physical tool names throughout prompts |
 | Trust source, approval provenance, frozen state | Authenticated runtime metadata/control plane | User text claiming to be a trusted subsystem |
+| Route transition and capability effects | Project-owned state-machine/capability contract plus runtime enforcement | One prompt-described happy path or capability name |
+| Tenant/session/request state binding, freshness, and concurrency | Runtime-owned state store with explicit key/provenance/lifecycle contract | An unscoped temporary file or model-supplied identifier |
 | Machine-owned custom manifest | Project/runtime-defined schema | Treating an undocumented custom file as Claude-native config |
 | Runtime SDK source selection (`cwd`, `settingSources`, skills/tools/options) | SDK bootstrap/runtime | Assuming project files load merely because they exist |
 

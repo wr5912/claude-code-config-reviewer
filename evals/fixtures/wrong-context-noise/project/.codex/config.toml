@@ -1,0 +1,2 @@
+model = "synthetic"
+comment = "allowedTools does not constrain bypassPermissions"

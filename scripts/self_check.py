@@ -18,11 +18,15 @@ REQUIRED_FILES = (
     "README.md",
     "references/official-compliance.md",
     "references/check-catalog.md",
+    "references/review-contract.md",
+    "references/gotchas.md",
     "references/eval-harness.md",
     "references/optimization-loop.md",
     "templates/review-report.md",
     "evals/cases.json",
     "scripts/scan_project.py",
+    "scripts/validate_review.py",
+    "scripts/run_evals.py",
 )
 
 SKILL_FRONTMATTER_KEYS = {"name", "description"}
@@ -74,6 +78,9 @@ IGNORED_DIRECTORY_NAMES = {
 IGNORED_FILE_NAMES = {
     ".DS_Store",
 }
+CATALOG_CHECK_PATTERN = re.compile(
+    r"^- \[([A-N]-\d{3})\] \[(SCANNER|REVIEWER|LIVE)\] (.+)$"
+)
 
 
 def fail(message: str) -> None:
@@ -472,56 +479,46 @@ def validate_manifest(path: Path) -> int:
     return len(listed_paths)
 
 
-def validate_evals(path: Path) -> int:
-    data = load_json(path, "evals/cases.json")
-    if not isinstance(data, dict):
-        fail("evals/cases.json root must be an object")
-    cases = data.get("cases")
-    if not isinstance(cases, list):
-        fail("evals/cases.json cases must be an array")
-    if len(cases) < 3:
-        fail("fewer than 3 eval cases")
+def validate_catalog(path: Path) -> int:
+    """校验唯一权威 catalog 的稳定 ID 与责任标签。"""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        fail(f"cannot read review catalog: {exc}")
 
-    seen_ids: set[str] = set()
-    for index, case in enumerate(cases):
-        if not isinstance(case, dict):
-            fail(f"evals/cases.json cases[{index}] must be an object")
-        required_keys = {
-            "id",
-            "category",
-            "prompt",
-            "must_include",
-            "must_not_include",
-        }
-        if set(case) != required_keys:
-            fail(
-                f"evals/cases.json cases[{index}] must contain exactly: "
-                + ", ".join(sorted(required_keys))
-            )
-        case_id = case.get("id")
-        if not isinstance(case_id, str) or not case_id.strip():
-            fail(f"evals/cases.json cases[{index}] has an invalid id")
-        if case_id in seen_ids:
-            fail(f"evals/cases.json repeats case id {case_id!r}")
-        seen_ids.add(case_id)
-        for field in ("category", "prompt"):
-            value = case[field]
-            if not isinstance(value, str) or not value.strip():
-                fail(
-                    f"evals/cases.json cases[{index}].{field} "
-                    "must be a non-empty string"
-                )
-        for field in ("must_include", "must_not_include"):
-            values = case[field]
-            if (
-                not isinstance(values, list)
-                or not all(isinstance(value, str) and value for value in values)
-            ):
-                fail(
-                    f"evals/cases.json cases[{index}].{field} "
-                    "must be an array of non-empty strings"
-                )
-    return len(cases)
+    check_ids: set[str] = set()
+    sections: set[str] = set()
+    for line_number, line in enumerate(lines, start=1):
+        if not line.startswith("- "):
+            continue
+        match = CATALOG_CHECK_PATTERN.fullmatch(line)
+        if not match:
+            fail(f"review catalog line {line_number} is not a stable check entry")
+        check_id, _owner, title = match.groups()
+        if check_id in check_ids:
+            fail(f"review catalog repeats check ID {check_id!r}")
+        if not title.strip():
+            fail(f"review catalog check {check_id!r} has no title")
+        check_ids.add(check_id)
+        sections.add(check_id[0])
+
+    expected_sections = set("ABCDEFGHIJKLMN")
+    if sections != expected_sections:
+        fail(
+            "review catalog must cover sections A-N; missing/extra: "
+            + ", ".join(sorted(expected_sections ^ sections))
+        )
+    return len(check_ids)
+
+
+def validate_evals(path: Path) -> int:
+    """复用 runner 的单一 v2 suite 契约，避免 self-check 漂移。"""
+    try:
+        from run_evals import EvalError, load_suite
+
+        return len(load_suite(path))
+    except (ImportError, EvalError, OSError, RuntimeError, ValueError) as exc:
+        fail(f"invalid eval suite: {exc}")
 
 
 def main() -> None:
@@ -540,6 +537,7 @@ def main() -> None:
         fail("SKILL.md name does not match the package identity")
     validate_openai_metadata(ROOT / "agents/openai.yaml", name)
     direct_reference_count = validate_direct_references(body)
+    catalog_check_count = validate_catalog(ROOT / "references/check-catalog.md")
     eval_case_count = validate_evals(ROOT / "evals/cases.json")
     manifest_file_count = validate_manifest(ROOT / "PACKAGE-MANIFEST.json")
 
@@ -547,6 +545,7 @@ def main() -> None:
     print(f"name={name}")
     print(f"body_lines={body_line_count}")
     print(f"direct_references={direct_reference_count}")
+    print(f"catalog_checks={catalog_check_count}")
     print(f"eval_cases={eval_case_count}")
     print(f"manifest_files={manifest_file_count}")
 

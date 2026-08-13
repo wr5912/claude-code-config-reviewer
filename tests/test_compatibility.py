@@ -70,6 +70,26 @@ class TargetCompatibilityTests(unittest.TestCase):
         self.assertEqual("", stdout.getvalue())
         self.assertIn("does not exist", stderr.getvalue())
 
+    def test_invalid_runtime_root_fails_with_code_two_without_cwd_fallback(self) -> None:
+        runtime_file = self.base / "runtime.py"
+        runtime_file.write_text("from claude_agent_sdk import query\n", encoding="utf-8")
+        for runtime_root in ("", str(self.base / "missing-runtime"), str(runtime_file)):
+            with self.subTest(runtime_root=runtime_root):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    result = scan_project.main(
+                        [
+                            "--target", str(self.project),
+                            "--runtime-root", runtime_root,
+                            "--format", "json",
+                        ]
+                    )
+
+                self.assertEqual(2, result)
+                self.assertEqual("", stdout.getvalue())
+                self.assertIn("Runtime root", stderr.getvalue())
+
     def test_regular_file_is_rejected(self) -> None:
         target = self.base / "not-a-directory"
         target.write_text("content", encoding="utf-8")
@@ -305,6 +325,42 @@ class ScannerIsolationTests(unittest.TestCase):
         self.assertEqual("agent-sdk", result["runtime"])
         evidence_paths = {item["path"] for item in result["runtime_evidence"]}
         self.assertEqual({"app.py", "requirements.txt"}, evidence_paths)
+
+    def test_external_runtime_root_is_a_separate_scanning_and_evidence_scope(self) -> None:
+        runtime_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(runtime_temp.cleanup)
+        runtime_root = Path(runtime_temp.name) / "Runtime source with spaces"
+        runtime_root.mkdir()
+        (self.project / "app.py").write_text(
+            "import subprocess\nsubprocess.run(['claude', '--print'])\n",
+            encoding="utf-8",
+        )
+        (self.project / ".claude").mkdir()
+        (self.project / ".claude" / "settings.json").write_text("{bad", encoding="utf-8")
+        (runtime_root / "app.py").write_text(
+            "from claude_agent_sdk import query\n", encoding="utf-8"
+        )
+        (runtime_root / ".claude").mkdir()
+        (runtime_root / ".claude" / "settings.json").write_text("{also-bad", encoding="utf-8")
+
+        result = scan_project.ReviewScanner(
+            self.project,
+            "auto",
+            runtime_root=runtime_root,
+            requested_runtime_root=str(runtime_root),
+        ).run()
+
+        self.assertEqual("agent-config-reviewer-scan/v2", result["schema_version"])
+        self.assertEqual("agent-sdk", result["runtime"])
+        self.assertEqual(str(runtime_root.resolve()), result["runtime_root"])
+        self.assertTrue(result["runtime_root_explicit"])
+        self.assertEqual(["app.py"], result["runtime_files"])
+        self.assertIn("app.py", result["target_files"])
+        self.assertEqual("runtime", result["runtime_evidence"][0]["scope"])
+        json_findings = [item for item in result["findings"] if item["id"] == "O-JSON"]
+        self.assertEqual(1, len(json_findings))
+        self.assertEqual("target", json_findings[0]["evidence"][0]["scope"])
+        self.assertNotIn("also-bad", json.dumps(result))
 
     def test_comments_strings_and_templates_do_not_trigger_runtime_detection(self) -> None:
         (self.project / "app.py").write_text(
@@ -869,6 +925,198 @@ class ScannerSymlinkBoundaryTests(unittest.TestCase):
         fail_open = [finding for finding in result["findings"] if finding["id"] == "R-HOOK-FAILOPEN"]
         self.assertEqual(1, len(fail_open))
         self.assertEqual(".claude/hooks/guard.py", fail_open[0]["evidence"][0]["path"])
+
+
+class HookReferenceContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp_dir.name)
+        self.project = self.base / "Claude project"
+        self.claude_dir = self.project / ".claude"
+        self.claude_dir.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def write_hooks(self, event: str, handlers: list[dict[str, object]]) -> None:
+        (self.claude_dir / "settings.json").write_text(
+            json.dumps(
+                {
+                    "hooks": {
+                        event: [
+                            {
+                                "matcher": "Bash",
+                                "hooks": handlers,
+                            }
+                        ]
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    def test_shell_and_exec_forms_resolve_space_paths_and_preserve_occurrences(self) -> None:
+        hook = self.project / "hooks with spaces" / "guard.py"
+        hook.parent.mkdir()
+        hook.write_text(
+            "try:\n    check()\nexcept Exception:\n    return True\n",
+            encoding="utf-8",
+        )
+        relative = "hooks with spaces/guard.py"
+        self.write_hooks(
+            "PreToolUse",
+            [
+                {"type": "command", "command": f'python "${{CLAUDE_PROJECT_DIR}}/{relative}"'},
+                {"type": "command", "command": f'python "$CLAUDE_PROJECT_DIR/{relative}"'},
+                {"type": "command", "command": f'pwsh -File "$env:CLAUDE_PROJECT_DIR/{relative}"'},
+                {
+                    "type": "command",
+                    "command": "python",
+                    "args": [f"${{CLAUDE_PROJECT_DIR}}/{relative}"],
+                },
+                {
+                    "type": "command",
+                    "command": f"${{CLAUDE_PROJECT_DIR}}/{relative}",
+                    "args": [],
+                },
+                {
+                    "type": "command",
+                    "command": "python",
+                    "args": [f"$CLAUDE_PROJECT_DIR/{relative}"],
+                },
+            ],
+        )
+
+        first = scan_project.ReviewScanner(self.project, "auto").run()
+        second = scan_project.ReviewScanner(self.project, "auto").run()
+
+        self.assertEqual(
+            ["RESOLVED", "RESOLVED", "RESOLVED", "RESOLVED", "RESOLVED", "DYNAMIC"],
+            [item["status"] for item in first["hook_references"]],
+        )
+        self.assertEqual(6, len(first["hook_references"]))
+        self.assertTrue(all(item["json_pointer"].startswith("/hooks/PreToolUse/") for item in first["hook_references"]))
+        self.assertEqual(
+            1,
+            sum(item["id"] == "R-HOOK-FAILOPEN" for item in first["findings"]),
+        )
+        unresolved = [item for item in first["candidates"] if item["rule_id"] == "A-HOOK-REFERENCE"]
+        self.assertEqual(1, len(unresolved))
+        self.assertEqual("P1", unresolved[0]["severity"])
+        self.assertEqual("hook-reference-resolution", unresolved[0]["root_cause_hint"])
+        self.assertEqual("target", unresolved[0]["evidence"][0]["scope"])
+        self.assertEqual(first["candidates"], first["findings"])
+        self.assertEqual(
+            [item["candidate_id"] for item in first["candidates"]],
+            [item["candidate_id"] for item in second["candidates"]],
+        )
+
+    def test_unquoted_shell_project_variable_is_not_resolved_through_space_path(self) -> None:
+        hook = self.project / "hooks" / "guard"
+        hook.parent.mkdir()
+        hook.write_text("exit 0\n", encoding="utf-8")
+
+        self.write_hooks(
+            "PreToolUse",
+            [
+                {"type": "command", "command": "sh $CLAUDE_PROJECT_DIR/hooks/guard"},
+                {"type": "command", "command": "sh ${CLAUDE_PROJECT_DIR}/hooks/guard"},
+                {"type": "command", "command": 'sh "$CLAUDE_PROJECT_DIR/hooks/guard"'},
+                {
+                    "type": "command",
+                    "command": 'sh "$CLAUDE_PROJECT_DIR/hooks/guard" ${CLAUDE_PROJECT_DIR}/hooks/guard',
+                },
+            ],
+        )
+
+        result = scan_project.ReviewScanner(self.project, "auto").run()
+        self.assertEqual(
+            ["MALFORMED", "MALFORMED", "RESOLVED", "RESOLVED", "MALFORMED"],
+            [item["status"] for item in result["hook_references"]],
+        )
+
+    def test_unresolved_statuses_are_explicit_and_never_read_outside_roots(self) -> None:
+        hooks = self.project / "hooks"
+        hooks.mkdir()
+        unreadable = hooks / "unreadable.py"
+        unreadable.write_text("print('not scanned')\n", encoding="utf-8")
+        outside = self.base / "outside.py"
+        outside.write_text("mcp__secret__exfiltrate\n", encoding="utf-8")
+        (hooks / "outside.py").symlink_to(outside)
+        self.write_hooks(
+            "PostToolUse",
+            [
+                {"type": "command", "command": 'python "${CLAUDE_PROJECT_DIR}/hooks/missing.py"'},
+                {"type": "command", "command": 'python "${CLAUDE_PROJECT_DIR}/hooks/outside.py"'},
+                {"type": "command", "command": 'python "${CLAUDE_PROJECT_DIR}/hooks/bad.py'},
+                {"type": "command", "command": 'python "$HOOK_ROOT/guard.py"'},
+                {
+                    "type": "command",
+                    "command": "python",
+                    "args": ["${CLAUDE_PROJECT_DIR}/hooks/unreadable.py"],
+                },
+            ],
+        )
+        original_access = scan_project.os.access
+
+        def access(path: os.PathLike[str], mode: int) -> bool:
+            if Path(path) == unreadable.resolve() and mode == os.R_OK:
+                return False
+            return original_access(path, mode)
+
+        with mock.patch.object(scan_project.os, "access", side_effect=access):
+            result = scan_project.ReviewScanner(self.project, "auto").run()
+
+        self.assertEqual(
+            {"MISSING", "OUTSIDE_ROOT", "MALFORMED", "DYNAMIC", "READ_FAILED"},
+            {item["status"] for item in result["hook_references"]},
+        )
+        unresolved = [item for item in result["candidates"] if item["rule_id"] == "A-HOOK-REFERENCE"]
+        self.assertEqual(5, len(unresolved))
+        self.assertTrue(all(item["severity"] == "P2" for item in unresolved))
+        self.assertTrue(all(item["candidate_id"] for item in result["hook_references"]))
+        serialized = json.dumps(result)
+        self.assertNotIn("mcp__secret__exfiltrate", serialized)
+        self.assertNotIn("R-HOOK-UNRESOLVED", serialized)
+
+    def test_sensitive_evidence_values_are_redacted(self) -> None:
+        (self.project / ".mcp.json").write_text(
+            json.dumps(
+                {
+                    "mcpServers": {
+                        "example": {
+                            "headers": {"Authorization": "Bearer top-secret-value"}
+                        }
+                    }
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        result = scan_project.ReviewScanner(self.project, "auto").run()
+        credential = [item for item in result["findings"] if item["id"] == "R-MCP-CREDENTIAL"]
+
+        self.assertEqual(1, len(credential))
+        self.assertIn("[REDACTED]", credential[0]["evidence"][0]["text"])
+        self.assertNotIn("top-secret-value", json.dumps(result))
+
+        samples = (
+            '"Authorization": "Token plain-secret-value"',
+            '"Authorization": "Bearer bearer-secret"',
+            '"api_key": "sk-live-secret"',
+            "token=plain-token",
+            'password: "secret with spaces"',
+        )
+        for sample in samples:
+            with self.subTest(sample=sample):
+                redacted = scan_project.ReviewScanner.redact_sensitive_text(sample)
+                self.assertIn("[REDACTED]", redacted)
+                self.assertNotRegex(
+                    redacted,
+                    r"plain-secret|bearer-secret|sk-live|plain-token|secret with",
+                )
 
 
 class DualHostPackageContractTests(unittest.TestCase):

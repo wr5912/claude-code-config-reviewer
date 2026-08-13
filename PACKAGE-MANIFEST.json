@@ -52,18 +52,18 @@
     },
     {
       "path": "README.md",
-      "bytes": 4534,
-      "sha256": "5781826b50241b6d810c5e5eab8d8a7c75b5d323f2354bf5661caa36b4c2c8dc"
+      "bytes": 6055,
+      "sha256": "e2038c118572070a011535ddde2231fc6c8ecaa53a209528fac1691119c2bf7c"
     },
     {
       "path": "README_en.md",
-      "bytes": 4827,
-      "sha256": "4c9939ecbd79d6154a7102cbb31e5e780fbd0bbf1169824584f751b6e5f3d78f"
+      "bytes": 6418,
+      "sha256": "6eb39e6d5ff166154009f65c602e35745b2606f79933e7e8dfe290abe4bf45bc"
     },
     {
       "path": "SKILL.md",
-      "bytes": 14496,
-      "sha256": "c2214a7f33ab1fc9ad243fca9635162dc03c837fa4f72c5cd0b4da9f2db338fa"
+      "bytes": 18637,
+      "sha256": "c8ba62c6cf10ceca75a295aa59b5a7dc984eb73ef8721ea520b1d75baac28877"
     },
     {
       "path": "agents/openai.yaml",
@@ -72,23 +72,198 @@
     },
     {
       "path": "evals/cases.json",
-      "bytes": 5098,
-      "sha256": "e4a9cc884bdccfa562db0c4ef3a155934ce3f4b50398f34106af366428a73f0b"
+      "bytes": 728,
+      "sha256": "c65ee71a0eba37f64721db6de8512ea75b1977177cebfc008a05cd2d6b513ba7"
+    },
+    {
+      "path": "evals/fixtures/hook-exec-paths/case.json",
+      "bytes": 309,
+      "sha256": "a2524a8a39f26ca0afef17c40a3855ed304bd34b763a0df4c5495492b4b07ee7"
+    },
+    {
+      "path": "evals/fixtures/hook-exec-paths/project/.claude/settings.json",
+      "bytes": 340,
+      "sha256": "99e79233950056427d0e014af536d12a43df4006dca0433461d3f7314b536591"
+    },
+    {
+      "path": "evals/fixtures/hook-exec-paths/project/tools/hooks/check exec.py",
+      "bytes": 43,
+      "sha256": "1f9d3f924195b004b6c378d5a7a95784e49b27f39b53aa19a1c5c421fb647eb1"
+    },
+    {
+      "path": "evals/fixtures/hook-exec-paths/project/tools/hooks/direct exec.py",
+      "bytes": 43,
+      "sha256": "1f9d3f924195b004b6c378d5a7a95784e49b27f39b53aa19a1c5c421fb647eb1"
+    },
+    {
+      "path": "evals/fixtures/hook-shell-paths/case.json",
+      "bytes": 453,
+      "sha256": "0a9847d0aa049cba7af626bf64348cd92cec5211fa2bbb4d7b44e24c57ff7f83"
+    },
+    {
+      "path": "evals/fixtures/hook-shell-paths/project/.claude/settings.json",
+      "bytes": 331,
+      "sha256": "10f15d420e30cdba5a00d94276d7cb2f939d031e787335a5bdffc48197a80d9d"
+    },
+    {
+      "path": "evals/fixtures/hook-shell-paths/project/tools/hooks/check braces.py",
+      "bytes": 43,
+      "sha256": "1f9d3f924195b004b6c378d5a7a95784e49b27f39b53aa19a1c5c421fb647eb1"
+    },
+    {
+      "path": "evals/fixtures/hook-shell-paths/project/tools/hooks/check shell.py",
+      "bytes": 43,
+      "sha256": "1f9d3f924195b004b6c378d5a7a95784e49b27f39b53aa19a1c5c421fb647eb1"
+    },
+    {
+      "path": "evals/fixtures/hook-unresolved/case.json",
+      "bytes": 1215,
+      "sha256": "39cb672f3dd1defebaaf072c3ea697bdbc62c9351690c3b21809cc1f81dfb8ee"
+    },
+    {
+      "path": "evals/fixtures/hook-unresolved/project/.claude/settings.json",
+      "bytes": 467,
+      "sha256": "f788a8872bf561a8b1bc1772462c1a4b7ae331413fc3eb931e478d65aa6f0471"
+    },
+    {
+      "path": "evals/fixtures/normal-clean/case.json",
+      "bytes": 341,
+      "sha256": "83b016c553e2ba8dc31d77bd55a1c88f444ecd6787d75840811661459ac37838"
+    },
+    {
+      "path": "evals/fixtures/normal-clean/project/.claude/settings.json",
+      "bytes": 58,
+      "sha256": "f6a94e4aee6b0f8eacbfc40ec53c9530806c548043e04de59e275d484d2205c9"
+    },
+    {
+      "path": "evals/fixtures/normal-clean/project/.claude/skills/inspect/SKILL.md",
+      "bytes": 181,
+      "sha256": "a1111e0ce97117f6e52720c5d82aa16eaf4b690cd2051f17ad3eaf2d75bc1b4e"
+    },
+    {
+      "path": "evals/fixtures/normal-clean/project/CLAUDE.md",
+      "bytes": 99,
+      "sha256": "a02373c802e854dcd0d4e9128d8742559d7c7cb4d28dfacfad961a992e414968"
+    },
+    {
+      "path": "evals/fixtures/route-capability-bypass/case.json",
+      "bytes": 631,
+      "sha256": "b2910df3fb90735210adb1b53a5af67e4aaffa1eeb8977268e644991f88ca428"
+    },
+    {
+      "path": "evals/fixtures/route-capability-bypass/project/CLAUDE.md",
+      "bytes": 77,
+      "sha256": "07f06fd9c1f3542c5c0fa5a500017ee06a37fdbcec86845c1fc8eb4b745276c4"
+    },
+    {
+      "path": "evals/fixtures/route-capability-bypass/project/app/router.py",
+      "bytes": 146,
+      "sha256": "763551f9a48ab7b9dceddcaf249ce7e06241ea355a6b21136939a2d3c15ccebf"
+    },
+    {
+      "path": "evals/fixtures/route-capability-bypass/project/config/routes.json",
+      "bytes": 205,
+      "sha256": "662abdf81a426a46bda2e3ae9b68f2ff7af625017f06ae81b77f1be912012863"
+    },
+    {
+      "path": "evals/fixtures/split-runtime-root/case.json",
+      "bytes": 470,
+      "sha256": "7ecbce300e0b4d9cb6ae0045813cace66f7980e37c1997a7d17cd4fbcd484741"
+    },
+    {
+      "path": "evals/fixtures/split-runtime-root/project/.claude/settings.json",
+      "bytes": 242,
+      "sha256": "6d2627a046571a166b0b76ce443a1e9e530eeb893efe60f25cd7346f389a2a4a"
+    },
+    {
+      "path": "evals/fixtures/split-runtime-root/project/CLAUDE.md",
+      "bytes": 95,
+      "sha256": "aa7325fbab0f63ae45f93563b7e9281de4a43164966024b5cc5f14def62d5c8f"
+    },
+    {
+      "path": "evals/fixtures/split-runtime-root/runtime/bootstrap.py",
+      "bytes": 107,
+      "sha256": "b9623785186dc56d5cfc3912d742ac87a51d68988e6a830d6aca382025ab30ea"
+    },
+    {
+      "path": "evals/fixtures/split-runtime-root/runtime/hooks/runtime_guard.py",
+      "bytes": 43,
+      "sha256": "1f9d3f924195b004b6c378d5a7a95784e49b27f39b53aa19a1c5c421fb647eb1"
+    },
+    {
+      "path": "evals/fixtures/state-store-isolation/case.json",
+      "bytes": 630,
+      "sha256": "9bfcb2a4e35dfa205e67e785bd01b8fe202510929b1e2e3c70e1530e583892e7"
+    },
+    {
+      "path": "evals/fixtures/state-store-isolation/project/CLAUDE.md",
+      "bytes": 79,
+      "sha256": "5c0fc2f6f06fac3fc0ac512cc1676c1f726a54e1e6c0be3afa0630fe2942e2a7"
+    },
+    {
+      "path": "evals/fixtures/state-store-isolation/project/app/handler.py",
+      "bytes": 215,
+      "sha256": "d14e5b1161042a1684ec077d00b4cdfadb3c84c9235529a652038d9143309708"
+    },
+    {
+      "path": "evals/fixtures/state-store-isolation/project/app/state_store.py",
+      "bytes": 140,
+      "sha256": "03e685da5f4ae84dd8e24dc682ff65bcafd1bcd179afa7587377e33b1b6b50db"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/case.json",
+      "bytes": 375,
+      "sha256": "253ef3ac146158344e2febd3dba177a0cafd89097c3cb4e6ea070384adb54b56"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/.agents/skills/noise/SKILL.md",
+      "bytes": 173,
+      "sha256": "83079589abf3d1c47f3937ab525aa1c5e20e4bded768cb884c5e7e41c8fbacd5"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/.claude/settings.json",
+      "bytes": 3,
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/.codex/config.toml",
+      "bytes": 82,
+      "sha256": "3af3d24616be820b6663ce33408a97ca714647dfd5573d994925c9830af44771"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/CLAUDE.md",
+      "bytes": 71,
+      "sha256": "12a04cf28b688662875fc427a271131641edcf55c895e17ea6caaad3c09934e0"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/docs/review.md",
+      "bytes": 122,
+      "sha256": "4bd6a18c7698f287bf4cf7979e3cb0f7536f06f2a8f2cd77c66976907550182c"
+    },
+    {
+      "path": "evals/fixtures/wrong-context-noise/project/tests/test_noise.py",
+      "bytes": 68,
+      "sha256": "ddefc0293dc91c8b94524ec8485022c1fcb1e057ccbf6414bfaa0a94eab3aab6"
     },
     {
       "path": "references/check-catalog.md",
-      "bytes": 7196,
-      "sha256": "17abc347c0efc7e2e716f4734b14c5ea40afc48a0304cea2ad9e197cdf7a4958"
+      "bytes": 10142,
+      "sha256": "2174cbe289331a483ddc6757e4aebf344ea430673c294836b3db70b6def46d26"
     },
     {
       "path": "references/config-responsibility-matrix.md",
-      "bytes": 2970,
-      "sha256": "b616ed88efcda48617e78ffe89e01218cee33f726443973d365ac702c230677d"
+      "bytes": 3345,
+      "sha256": "f9cfe08d2e0f070e5ecd88de097a8e50bc15be59cd15ff9f3fbd3b34226d590f"
     },
     {
       "path": "references/eval-harness.md",
-      "bytes": 3203,
-      "sha256": "ccb17005cca5039117057ae1c1c6e0f1cf51e199df0221dcecf22f491b488e0e"
+      "bytes": 4798,
+      "sha256": "968d15f395f65b1fa46ec56340158308ce053a25c57ec9da79b64dd5af59ae69"
+    },
+    {
+      "path": "references/gotchas.md",
+      "bytes": 2387,
+      "sha256": "2e68c323a1f97e209fe9a8c9a7908bacdc441c1657ca87c627cd2438e7bf301d"
     },
     {
       "path": "references/host-compatibility.md",
@@ -102,43 +277,68 @@
     },
     {
       "path": "references/official-compliance.md",
-      "bytes": 11454,
-      "sha256": "8c04c78a3b52360d1a3d157c6f0ca7e2493d099c9b74a3ed491a0ed1a261536d"
+      "bytes": 12200,
+      "sha256": "680bddade25fce7954959b78751d09dc6c89031e2a0eabf2c0a546cf12baf2be"
     },
     {
       "path": "references/optimization-loop.md",
-      "bytes": 2302,
-      "sha256": "ec7ef328efdac48bba9602a1ff1ad6e880b301c19bf63951180afde55c44c9de"
+      "bytes": 2607,
+      "sha256": "b246d2477bf0287ba2608b6b14cdfeba0f4552a8868eec7450a8f75aff54cfe1"
     },
     {
       "path": "references/remediation-patterns.md",
-      "bytes": 2854,
-      "sha256": "56019fddbf7f3c4189d86f8909dde396ddd382a2e655f6230573ff66bd8deb84"
+      "bytes": 3908,
+      "sha256": "88e68b3351f00f31036362847d001563acef4a543e5d319cf72d4e8811e517a7"
+    },
+    {
+      "path": "references/review-contract.md",
+      "bytes": 5686,
+      "sha256": "71e5c6f268249e12da9fd38d61ed1a30f3da2c2664369b1a3836592ad582c78c"
     },
     {
       "path": "references/review-methodology.md",
-      "bytes": 2888,
-      "sha256": "ceb701cd3285d18d7ab67ff0c7ecdeeb524d2615311bf79bf8870836e5fd8162"
+      "bytes": 4908,
+      "sha256": "b3c933b66d556135bcfb89f83660c8c414ce0942035ec6e75be5815398cbd648"
+    },
+    {
+      "path": "scripts/run_evals.py",
+      "bytes": 24937,
+      "sha256": "a4dd2bbac4358ac6106823fc3b76f895f2b31ae4e7c320a36411847db1681b88"
     },
     {
       "path": "scripts/scan_project.py",
-      "bytes": 82514,
-      "sha256": "30f86e2bd29a0e4197d24abaf1ee5f6f40715da0e90ad305cdc228b60d56ab1f"
+      "bytes": 102769,
+      "sha256": "4e6aa49f6087fc95b402a5261c68990f607461740ea68e7a4cfe50bee48056cd"
     },
     {
       "path": "scripts/self_check.py",
-      "bytes": 20160,
-      "sha256": "abe62eafca0a944069e1e74249bc2d48480fdeadbed243fb504a84562e5a82c4"
+      "bytes": 20128,
+      "sha256": "444c70f1a6d0d4648404b3c93167d522233a7580799743ef86c6f34aed050ce1"
+    },
+    {
+      "path": "scripts/validate_review.py",
+      "bytes": 35558,
+      "sha256": "a0172834421d8ca306d5a157d0beedb1dfc2348ad491a76910730b7eeb2bfcec"
     },
     {
       "path": "templates/review-report.md",
-      "bytes": 2319,
-      "sha256": "e1f7b12ec486ed040c0e5d4425c70a066f47c30d4236c831a9739a30420036ba"
+      "bytes": 2995,
+      "sha256": "933c2a71f5e9ff223080f6c36df12e691ce6830e5f634088fd0abdd5229a66cd"
     },
     {
       "path": "tests/test_compatibility.py",
-      "bytes": 37034,
-      "sha256": "8d4db2e148482b087b895d4cb6634503d924106ac157c7f32d24fb536c6228db"
+      "bytes": 47980,
+      "sha256": "e9f316938f6f5d252f2eb9ccbe13b0470aaff068e379ec9b4138059bd62ebfc4"
+    },
+    {
+      "path": "tests/test_eval_runner.py",
+      "bytes": 6812,
+      "sha256": "9879c04ca823afa314ca0f77002588cd03d2aa65115dd2676f8ab72d6cd4413e"
+    },
+    {
+      "path": "tests/test_review_contract.py",
+      "bytes": 10145,
+      "sha256": "334f950831e0404d2736fdf869bd14f3bae783b8c2423ef15d57f542023bd0ae"
     },
     {
       "path": "tests/test_self_check.py",

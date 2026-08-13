@@ -1,0 +1,14 @@
+{
+  "schema_version": "agent-config-reviewer-eval-case/v2",
+  "id": "wrong-context-noise",
+  "category": "wrong-context",
+  "target": "project",
+  "runtime_root": null,
+  "runtime": "cli",
+  "expectations": {
+    "candidates": [],
+    "findings": [],
+    "dispositions": [],
+    "forbidden_official_ids": ["O-JSON", "O-PERM-ABS", "O-PERM-PATH-TOOL", "O-SDK-ALLOWLIST"]
+  }
+}

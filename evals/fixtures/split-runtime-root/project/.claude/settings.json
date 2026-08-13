@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {"type": "command", "command": "python3", "args": ["${CLAUDE_PROJECT_DIR}/../runtime/hooks/runtime_guard.py"]}
+        ]
+      }
+    ]
+  }
+}

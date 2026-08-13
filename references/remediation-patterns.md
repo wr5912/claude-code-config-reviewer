@@ -81,3 +81,28 @@ Pattern:
 - one canonical workflow;
 - legacy entry is a thin alias/adapter or explicitly disabled;
 - tests assert both compatibility and lack of split-brain policy.
+
+## R9 — Bound state to authority and request identity
+
+Problem: a global/session-only state record is reused across tenants, requests,
+or concurrent operations.
+
+Pattern:
+- derive state keys from runtime-authenticated tenant/session/request/task IDs;
+- record authority, creation time, expiry, and expected transition version;
+- make critical updates atomic or conflict-detecting;
+- treat missing, malformed, stale, or conflicting state explicitly;
+- validate isolation and replay behavior with synthetic multi-session fixtures.
+
+## R10 — Declare capability side effects
+
+Problem: a route name or tool label hides executable, external, destructive, or
+authority-changing behavior.
+
+Pattern:
+- declare composable effects (`READ_STATE`, `WRITE_STATE`, `DELETE_STATE`,
+  `EXECUTE`, `EXTERNAL_IO`, `AUTHORITY_CHANGE`);
+- use `UNKNOWN` when a custom capability cannot be proven bounded;
+- apply guards to every transition that can reach the effect, including error
+  and alternate routes;
+- validate actual effects only in mock/replay/test environments.

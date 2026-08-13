@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {"type": "command", "command": "python3", "args": ["${CLAUDE_PROJECT_DIR}/tools/hooks/check exec.py"]},
+          {"type": "command", "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/direct exec.py", "args": []}
+        ]
+      }
+    ]
+  }
+}

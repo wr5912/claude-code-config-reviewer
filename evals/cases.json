@@ -1,110 +1,13 @@
 {
-  "schema": "agent-config-reviewer-evals/v1",
+  "schema_version": "agent-config-reviewer-evals/v2",
   "cases": [
-    {
-      "id": "official-sdk-skill-allowed-tools",
-      "category": "official-semantics",
-      "prompt": "An Agent SDK project relies on SKILL.md allowed-tools as the only restriction for a sensitive Skill. Review it.",
-      "must_include": ["Agent SDK", "allowed-tools", "does not apply", "runtime"],
-      "must_not_include": ["SKILL.md allowed-tools is a restrictive SDK allowlist"]
-    },
-    {
-      "id": "official-permission-absolute-path",
-      "category": "official-semantics",
-      "prompt": "Project settings use Read(/etc/secret/**) intending to block /etc. Review it.",
-      "must_include": ["//", "settings source", "absolute"],
-      "must_not_include": ["/etc/secret is an absolute permission pattern"]
-    },
-    {
-      "id": "mcp-env-placeholder-positive",
-      "category": "official-positive",
-      "prompt": "A .mcp.json Authorization header is Bearer ${API_TOKEN}. Is that syntax itself a problem?",
-      "must_include": ["supported", "environment"],
-      "must_not_include": ["hard-coded token", "invalid placeholder"]
-    },
-    {
-      "id": "commands-legacy-not-invalid",
-      "category": "official-legacy",
-      "prompt": "A project uses .claude/commands/deploy.md. Review compliance.",
-      "must_include": ["legacy", "supported", "Skills"],
-      "must_not_include": ["invalid", "unsupported"]
-    },
-    {
-      "id": "subagent-tools-inheritance",
-      "category": "security-risk",
-      "prompt": "A sensitive custom subagent omits tools. Review it.",
-      "must_include": ["inherits", "not noncompliant", "least privilege"],
-      "must_not_include": ["tools is required"]
-    },
-    {
-      "id": "prompt-not-enforcement",
-      "category": "security",
-      "prompt": "CLAUDE.md says never call a destructive MCP tool, while permissions allow it. Is the boundary enforced?",
-      "must_include": ["context", "not enforced", "permission"],
-      "must_not_include": ["safe because CLAUDE.md forbids it"]
-    },
-    {
-      "id": "tests-as-validation-assets",
-      "category": "optimization",
-      "prompt": "The project already has an Agent SDK integration test harness in an arbitrary directory. How should the reviewer use it?",
-      "must_include": ["discover", "baseline", "regression", "safe"],
-      "must_not_include": ["assume a fixed tests directory"]
-    },
-    {
-      "id": "custom-manifest-not-official",
-      "category": "classification",
-      "prompt": "The repository has a custom agent manifest file not documented by Claude Code. How should it be reviewed?",
-      "must_include": ["project extension", "not", "official Claude"],
-      "must_not_include": ["Claude requires this manifest"]
-    },
-    {
-      "id": "dual-host-single-review-subject",
-      "category": "host-compatibility",
-      "prompt": "I invoked the reviewer from Codex. Should it now audit AGENTS.md and Codex settings?",
-      "must_include": ["host", "Claude Code configuration", "not"],
-      "must_not_include": ["Codex configuration is the review subject"]
-    },
-    {
-      "id": "codex-explicit-target",
-      "category": "target-contract",
-      "prompt": "In Codex, use $agent-config-reviewer to review /srv/claude-project instead of the current repository.",
-      "must_include": ["requested target", "/srv/claude-project", "normalized"],
-      "must_not_include": ["review the current repository instead"]
-    },
-    {
-      "id": "claude-explicit-target",
-      "category": "target-contract",
-      "prompt": "In Claude Code, run /agent-config-reviewer review /srv/claude-project.",
-      "must_include": ["requested target", "/srv/claude-project", "Claude"],
-      "must_not_include": ["Codex configuration"]
-    },
-    {
-      "id": "project-claude-dir-normalization",
-      "category": "target-contract",
-      "prompt": "Review /srv/claude-project/.claude as the explicit target.",
-      "must_include": ["/srv/claude-project", "normalized", "CLAUDE.md", ".mcp.json"],
-      "must_not_include": ["scope only to files below .claude"]
-    },
-    {
-      "id": "invalid-target-no-fallback",
-      "category": "target-contract",
-      "prompt": "Review /missing/claude-project, but that target does not exist.",
-      "must_include": ["fail", "target", "not exist"],
-      "must_not_include": ["fall back", "reviewed the current directory"]
-    },
-    {
-      "id": "codex-host-config-excluded",
-      "category": "host-isolation",
-      "prompt": "The target Claude project also contains .agents and .codex directories used by the host. How should they affect findings?",
-      "must_include": ["exclude", "host", "Claude configuration"],
-      "must_not_include": ["classify AGENTS.md as CLAUDE.md", "official Claude violation"]
-    },
-    {
-      "id": "host-config-directory-rejected-as-target",
-      "category": "host-isolation",
-      "prompt": "Review /srv/claude-project/.agents as the explicit target.",
-      "must_include": ["reject", "host configuration", "Claude project"],
-      "must_not_include": ["scan .agents as a Claude project", "fall back"]
-    }
+    {"id": "normal-clean", "path": "fixtures/normal-clean/case.json"},
+    {"id": "hook-shell-paths", "path": "fixtures/hook-shell-paths/case.json"},
+    {"id": "hook-exec-paths", "path": "fixtures/hook-exec-paths/case.json"},
+    {"id": "hook-unresolved", "path": "fixtures/hook-unresolved/case.json"},
+    {"id": "split-runtime-root", "path": "fixtures/split-runtime-root/case.json"},
+    {"id": "state-store-isolation", "path": "fixtures/state-store-isolation/case.json"},
+    {"id": "route-capability-bypass", "path": "fixtures/route-capability-bypass/case.json"},
+    {"id": "wrong-context-noise", "path": "fixtures/wrong-context-noise/case.json"}
   ]
 }

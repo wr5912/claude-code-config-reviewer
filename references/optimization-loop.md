@@ -63,3 +63,8 @@ When repeated reviews demonstrate the same root cause:
 `repeated evidence -> root-cause pattern -> deterministic scanner rule or review rule -> regression eval`
 
 A heuristic should not become a hard compliance rule unless official Claude documentation supports it.
+
+Every confirmed real-world miss must first be reproduced with a synthetic,
+non-sensitive fixture and assigned a stable fixture ID. Link any promoted rule
+and `references/gotchas.md` entry to that fixture. Never copy real tenant,
+session, credential, workspace, or private-report values into the package.
