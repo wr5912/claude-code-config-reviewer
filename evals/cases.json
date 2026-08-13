@@ -1,0 +1,61 @@
+{
+  "schema": "agent-config-reviewer-evals/v1",
+  "cases": [
+    {
+      "id": "official-sdk-skill-allowed-tools",
+      "category": "official-semantics",
+      "prompt": "An Agent SDK project relies on SKILL.md allowed-tools as the only restriction for a sensitive Skill. Review it.",
+      "must_include": ["Agent SDK", "allowed-tools", "does not apply", "runtime"],
+      "must_not_include": ["SKILL.md allowed-tools is a restrictive SDK allowlist"]
+    },
+    {
+      "id": "official-permission-absolute-path",
+      "category": "official-semantics",
+      "prompt": "Project settings use Read(/etc/secret/**) intending to block /etc. Review it.",
+      "must_include": ["//", "settings source", "absolute"],
+      "must_not_include": ["/etc/secret is an absolute permission pattern"]
+    },
+    {
+      "id": "mcp-env-placeholder-positive",
+      "category": "official-positive",
+      "prompt": "A .mcp.json Authorization header is Bearer ${API_TOKEN}. Is that syntax itself a problem?",
+      "must_include": ["supported", "environment"],
+      "must_not_include": ["hard-coded token", "invalid placeholder"]
+    },
+    {
+      "id": "commands-legacy-not-invalid",
+      "category": "official-legacy",
+      "prompt": "A project uses .claude/commands/deploy.md. Review compliance.",
+      "must_include": ["legacy", "supported", "Skills"],
+      "must_not_include": ["invalid", "unsupported"]
+    },
+    {
+      "id": "subagent-tools-inheritance",
+      "category": "security-risk",
+      "prompt": "A sensitive custom subagent omits tools. Review it.",
+      "must_include": ["inherits", "not noncompliant", "least privilege"],
+      "must_not_include": ["tools is required"]
+    },
+    {
+      "id": "prompt-not-enforcement",
+      "category": "security",
+      "prompt": "CLAUDE.md says never call a destructive MCP tool, while permissions allow it. Is the boundary enforced?",
+      "must_include": ["context", "not enforced", "permission"],
+      "must_not_include": ["safe because CLAUDE.md forbids it"]
+    },
+    {
+      "id": "tests-as-validation-assets",
+      "category": "optimization",
+      "prompt": "The project already has an Agent SDK integration test harness in an arbitrary directory. How should the reviewer use it?",
+      "must_include": ["discover", "baseline", "regression", "safe"],
+      "must_not_include": ["assume a fixed tests directory"]
+    },
+    {
+      "id": "custom-manifest-not-official",
+      "category": "classification",
+      "prompt": "The repository has a custom agent manifest file not documented by Claude Code. How should it be reviewed?",
+      "must_include": ["project extension", "not", "official Claude"],
+      "must_not_include": ["Claude requires this manifest"]
+    }
+  ]
+}

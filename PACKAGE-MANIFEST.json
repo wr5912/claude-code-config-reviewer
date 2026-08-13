@@ -1,0 +1,78 @@
+{
+  "package": "agent-config-reviewer",
+  "version": "2.0.0-final",
+  "official_baseline_checked": "2026-08-13",
+  "portable_project_install": ".claude/skills/agent-config-reviewer/",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 3007,
+      "sha256": "4583d36d4ee69a46b1a643e71ed3f2fad8d75787c632891cc25d92656baf23f4"
+    },
+    {
+      "path": "SKILL.md",
+      "bytes": 12769,
+      "sha256": "19e1b7cae11955593ca42e9a7172e0b2408093fa179ca01c784dc5d859e46b59"
+    },
+    {
+      "path": "evals/cases.json",
+      "bytes": 2738,
+      "sha256": "8ecc0650be055818bab3637f1da035b3235672ec816ddc2f6b31ea247ac4ee85"
+    },
+    {
+      "path": "references/check-catalog.md",
+      "bytes": 6869,
+      "sha256": "3809eea9a9934e329de6b547f0d22514b3e1bed336208cfbab9ee48ca152e45e"
+    },
+    {
+      "path": "references/config-responsibility-matrix.md",
+      "bytes": 2970,
+      "sha256": "b616ed88efcda48617e78ffe89e01218cee33f726443973d365ac702c230677d"
+    },
+    {
+      "path": "references/eval-harness.md",
+      "bytes": 3140,
+      "sha256": "bcc593fae3203ee1d76a0acc24f6626411c71fe4d348c2f30813a342087e3a8b"
+    },
+    {
+      "path": "references/non-normative-inspirations.md",
+      "bytes": 1140,
+      "sha256": "b0e72784be74104df74f358b2e5bd183f5eca6e64dd5ec163cc701add7325191"
+    },
+    {
+      "path": "references/official-compliance.md",
+      "bytes": 11182,
+      "sha256": "7e7764c315424265bf92d4f5406ae212fe47ce5cbeec25c1f7b6435f475f86e8"
+    },
+    {
+      "path": "references/optimization-loop.md",
+      "bytes": 2302,
+      "sha256": "ec7ef328efdac48bba9602a1ff1ad6e880b301c19bf63951180afde55c44c9de"
+    },
+    {
+      "path": "references/remediation-patterns.md",
+      "bytes": 2854,
+      "sha256": "56019fddbf7f3c4189d86f8909dde396ddd382a2e655f6230573ff66bd8deb84"
+    },
+    {
+      "path": "references/review-methodology.md",
+      "bytes": 2556,
+      "sha256": "eca96796493e7b8452ad7d7601868da88ecf2d882d595f1d209316e347d6b6b5"
+    },
+    {
+      "path": "scripts/scan_project.py",
+      "bytes": 38801,
+      "sha256": "6a60f2e7d959679562ee5db0d0e5135f1f7f827184f1642a9fbfd64b6834f55e"
+    },
+    {
+      "path": "scripts/self_check.py",
+      "bytes": 1846,
+      "sha256": "83ef9021dc5b088ae58d3e5409788b4f1ca0b5e11deccb0310d1a64489df4dd7"
+    },
+    {
+      "path": "templates/review-report.md",
+      "bytes": 2018,
+      "sha256": "a14b0a10762750ea9851d6124eec097e21e02880adb7a6a1c7bafccb483f2c34"
+    }
+  ]
+}
